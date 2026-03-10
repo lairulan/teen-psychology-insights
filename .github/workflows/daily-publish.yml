@@ -26,23 +26,17 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: 安装依赖
-        run: |
-          python3 -m pip install --upgrade pip
-          pip install requests
-
       - name: 生成并发布心理学文章
         env:
           WECHAT_API_KEY: ${{ secrets.WECHAT_API_KEY }}
-          DOUBAO_API_KEY: ${{ secrets.DOUBAO_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
         run: |
           set -x
           cd scripts
 
-          if [ -z "$DOUBAO_API_KEY" ]; then
-            echo "错误：未设置 DOUBAO_API_KEY"
+          if [ -z "$GOOGLE_API_KEY" ]; then
+            echo "错误：未设置 GOOGLE_API_KEY"
             exit 1
           fi
 

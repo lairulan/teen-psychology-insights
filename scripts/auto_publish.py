@@ -23,7 +23,6 @@ from urllib import request, error
 
 # 配置
 WECHAT_API_KEY = os.environ.get("WECHAT_API_KEY")
-DOUBAO_API_KEY = os.environ.get("DOUBAO_API_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 IMGBB_API_KEY = os.environ.get("IMGBB_API_KEY")
 APPID = "wx52189e9b012018e1"
@@ -82,27 +81,31 @@ def log(message):
         pass
 
 
-def call_doubao_api(prompt, max_tokens=4000):
-    """Call Doubao API for content generation"""
-    url = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {DOUBAO_API_KEY}",
-        "Content-Type": "application/json",
-    }
+def call_gemini_api(prompt, max_tokens=4000):
+    """Call Google Gemini API for content generation"""
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
+    )
     payload = {
-        "model": "doubao-seed-2-0-lite-260215",
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-        "temperature": 0.85,
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "maxOutputTokens": max_tokens,
+            "temperature": 0.85,
+        },
     }
+    req = request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     try:
-        import requests
-        response = requests.post(url, headers=headers, json=payload, timeout=90)
-        response.raise_for_status()
-        result = response.json()
-        return result["choices"][0]["message"]["content"]
+        with request.urlopen(req, timeout=90) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        return result["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
-        log(f"豆包 API 调用失败: {e}")
+        log(f"Gemini API 调用失败: {e}")
         return None
 
 
@@ -161,7 +164,7 @@ def generate_article(topic_info):
 
 直接输出文章内容，不要输出任何说明。"""
 
-    content = call_doubao_api(prompt, max_tokens=4000)
+    content = call_gemini_api(prompt, max_tokens=4000)
     if not content:
         log("文章生成失败")
         return None
@@ -249,17 +252,18 @@ def generate_cover_image(title):
 def upload_to_imgbb(image_bytes):
     """Upload image to IMGBB and return URL"""
     try:
-        import requests
-        response = requests.post(
+        import urllib.parse
+        data = urllib.parse.urlencode({
+            "key": IMGBB_API_KEY,
+            "image": base64.b64encode(image_bytes).decode("utf-8"),
+        }).encode("utf-8")
+        req = request.Request(
             "https://api.imgbb.com/1/upload",
-            data={
-                "key": IMGBB_API_KEY,
-                "image": base64.b64encode(image_bytes).decode("utf-8"),
-            },
-            timeout=30,
+            data=data,
+            method="POST",
         )
-        response.raise_for_status()
-        result = response.json()
+        with request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
         if result.get("success"):
             url = result["data"]["url"]
             log(f"封面图上传成功: {url}")
@@ -380,7 +384,7 @@ def publish_to_wechat(title, html_content, cover_url=None):
     # Generate summary
     summary_prompt = f"""请用一句话（20-30字）概括这篇文章的核心内容，要求温暖有吸引力，适合做公众号文章摘要：
 标题：{title}"""
-    summary = call_doubao_api(summary_prompt, max_tokens=100)
+    summary = call_gemini_api(summary_prompt, max_tokens=100)
     if summary:
         summary = summary.strip().strip('"\'')
         log(f"生成摘要: {summary}")
@@ -400,15 +404,14 @@ def publish_to_wechat(title, html_content, cover_url=None):
     }
 
     try:
-        import requests
-        response = requests.post(
+        req = request.Request(
             f"{API_BASE}/wechat-publish",
+            data=json.dumps(payload).encode("utf-8"),
             headers=headers,
-            json=payload,
-            timeout=30,
+            method="POST",
         )
-        response.raise_for_status()
-        result = response.json()
+        with request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
         log(f"API 响应: {result}")
         success = result.get("success", False)
         if not success:
@@ -431,10 +434,8 @@ def main():
         errors = []
         if not WECHAT_API_KEY:
             errors.append("未设置 WECHAT_API_KEY")
-        if not DOUBAO_API_KEY:
-            errors.append("未设置 DOUBAO_API_KEY")
         if not GOOGLE_API_KEY:
-            print("⚠️ 未设置 GOOGLE_API_KEY（封面图将跳过）")
+            errors.append("未设置 GOOGLE_API_KEY")
         if not IMGBB_API_KEY:
             print("⚠️ 未设置 IMGBB_API_KEY（封面图上传将跳过）")
         for e in errors:
@@ -445,8 +446,8 @@ def main():
         sys.exit(0)
 
     # Validate required env vars
-    if not DOUBAO_API_KEY:
-        log("❌ 未设置 DOUBAO_API_KEY")
+    if not GOOGLE_API_KEY:
+        log("❌ 未设置 GOOGLE_API_KEY")
         sys.exit(1)
     if not WECHAT_API_KEY and not args.dry_run:
         log("❌ 未设置 WECHAT_API_KEY")
