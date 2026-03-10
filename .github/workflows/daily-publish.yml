@@ -1,0 +1,75 @@
+name: 心光馨语每日发布
+
+on:
+  # GitHub Actions 自带定时触发（UTC 12:00 = 北京时间 20:00）
+  schedule:
+    - cron: '0 12 * * *'
+
+  # Cloudflare Workers 触发（作为备份双保险）
+  repository_dispatch:
+    types: [daily-psychology]
+
+  # 支持手动触发
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install requests
+
+      - name: 生成并发布心理学文章
+        env:
+          WECHAT_API_KEY: ${{ secrets.WECHAT_API_KEY }}
+          DOUBAO_API_KEY: ${{ secrets.DOUBAO_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
+        run: |
+          set -x
+          cd scripts
+
+          if [ -z "$DOUBAO_API_KEY" ]; then
+            echo "错误：未设置 DOUBAO_API_KEY"
+            exit 1
+          fi
+
+          # 运行脚本，带重试机制
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            echo "尝试 $((RETRY_COUNT + 1))/$MAX_RETRIES..."
+
+            if python3 auto_publish.py 2>&1; then
+              echo "✅ 心光馨语文章发布成功！"
+              exit 0
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "⚠️ 失败，等待 30 秒后重试..."
+                sleep 30
+              fi
+            fi
+          done
+
+          echo "::error::所有重试都失败了"
+          exit 1
+
+      - name: 记录日志
+        if: always()
+        run: |
+          echo "任务执行时间: $(date)"
+          echo "时区: Asia/Shanghai (UTC+8)"
