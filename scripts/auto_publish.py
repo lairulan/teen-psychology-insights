@@ -26,6 +26,8 @@ from urllib import request, error
 WECHAT_API_KEY = os.environ.get("WECHAT_API_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 IMGBB_API_KEY = os.environ.get("IMGBB_API_KEY")
+# 天行数据 API Key（用于获取微博热搜）
+TIANAPI_KEY = os.environ.get("TIANAPI_KEY", "a0ba59d286ea1b308f5719a4ba28d075")
 APPID = "wx52189e9b012018e1"
 API_BASE = "https://wx.limyai.com/api/openapi"
 
@@ -141,14 +143,78 @@ def call_gemini_api(prompt, max_tokens=4000):
         return None
 
 
+def fetch_weibo_hot():
+    """Fetch top Weibo trending topics via Tianapi"""
+    try:
+        url = (
+            f"https://apis.tianapi.com/weibohot/index?"
+            f"{urllib.parse.urlencode({'key': TIANAPI_KEY, 'num': 50})}"
+        )
+        req = request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if data.get("code") != 200:
+            log(f"Tianapi 返回错误: {data.get('msg')}")
+            return []
+        hot_list = data.get("result", {}).get("list", [])
+        topics = [item.get("hotword", "").strip() for item in hot_list if item.get("hotword")]
+        log(f"获取到 {len(topics)} 条微博热搜")
+        return topics
+    except Exception as e:
+        log(f"微博热搜获取失败: {e}")
+        return []
+
+
+def select_topic_from_hot(hot_topics):
+    """Use Gemini to pick the best psychology angle from Weibo trending topics"""
+    topics_text = "\n".join(f"{i+1}. {t}" for i, t in enumerate(hot_topics[:30]))
+    prompt = f"""你是"心光馨语"公众号的编辑，专注青少年心理健康和亲子关系。
+
+以下是今日微博热搜榜（前30条）：
+{topics_text}
+
+请从中选一个最适合结合青少年心理学或亲子关系来写文章的热搜话题，或者受热搜启发提炼一个相关话题。
+
+要求：
+- 优先选与青少年情绪、学习、亲子关系、成长直接相关的热搜
+- 如没有直接相关的，可从社会热点（考试、就业、家庭、情感）中提炼一个心理学角度
+- 话题要能引发家长或青少年的共鸣
+- 避免选娱乐八卦、政治、灾难类话题
+
+请用 JSON 格式回复（不要有代码块标记）：
+{{"topic": "提炼后的话题", "category": "分类（学业压力/人际关系/情绪管理/亲子沟通/自我认知/趣味心理/成长与变化）", "hot_ref": "参考的热搜词"}}"""
+
+    result = call_gemini_api(prompt, max_tokens=200)
+    if not result:
+        return None
+    try:
+        # 清理可能的 markdown 代码块
+        result = re.sub(r"```(?:json)?|```", "", result).strip()
+        data = json.loads(result)
+        if data.get("topic"):
+            log(f"热搜选题: {data['topic']} (参考热搜: {data.get('hot_ref', '')})")
+            return {"topic": data["topic"], "category": data.get("category", "热点"), "hot_ref": data.get("hot_ref", "")}
+    except Exception as e:
+        log(f"热搜选题解析失败: {e}, 原始返回: {result[:100]}")
+    return None
+
+
 def select_topic():
-    """Select today's topic by cycling through pool (avoids repeats within one full cycle)"""
+    """Select today's topic: try Weibo hot topics first, fallback to pool"""
+    # 优先尝试热搜选题
+    hot_topics = fetch_weibo_hot()
+    if hot_topics:
+        topic = select_topic_from_hot(hot_topics)
+        if topic:
+            return topic
+        log("热搜选题失败，使用话题池兜底")
+
+    # 兜底：从话题池按天数轮询
     today = datetime.now()
-    # 以2026-01-01为起点，按天数取模轮询，保证每个话题都被用到
     epoch = datetime(2026, 1, 1)
     day_index = (today - epoch).days % len(TOPIC_POOL)
     topic = TOPIC_POOL[day_index]
-    log(f"选题 [第{day_index + 1}/{len(TOPIC_POOL)}个]: {topic['topic']} (分类: {topic['category']})")
+    log(f"话题池选题 [第{day_index + 1}/{len(TOPIC_POOL)}个]: {topic['topic']} (分类: {topic['category']})")
     return topic
 
 
@@ -162,6 +228,7 @@ def generate_article(topic_info):
 
 话题：{topic_info['topic']}
 分类：{topic_info['category']}
+{f"热搜背景：今日微博热搜「{topic_info['hot_ref']}」与此话题相关，可在文章中自然呼应这一热点" if topic_info.get('hot_ref') else ""}
 
 严格要求：
 1. 字数：800-1200字，绝不超过1500字
