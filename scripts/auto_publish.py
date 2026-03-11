@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 """
-心光馨语自动发布脚本 V1.1
-每天 20:00 自动运行，生成闺蜜聊天式心理学短文并发布到公众号
+心光馨语自动发布脚本 v2.3
+每天自动运行，生成闺蜜聊天式心理学短文并发布到公众号
 
 流程：
-1. 从预设话题库按日期轮询选题（避免重复）
-2. 用 Google Gemini API 生成 800-1200 字闺蜜聊天式文章
-3. 用 Google Gemini Imagen 生成封面图
-4. 转换为微信公众号 HTML（grace 主题风格）
+1. 选题（4层漏斗：5平台热搜轮换 → Gemini实时搜索 → 日历时令 → 话题池）
+2. 用 Gemini 2.5 Flash 生成 800-1200 字闺蜜聊天式文章（豆包兜底）
+3. 用 Gemini Imagen 3 生成封面图
+4. 转换为微信公众号 HTML（暖橙色调 #FF9F43）
 5. 发布到"心光馨语"公众号
+
+版本历史：
+v1.0  初始版本
+v2.0  全面升级：公众号改"心光馨语"，闺蜜聊天式，grace排版+暖橙色调
+v2.1  API升级：Gemini 2.5 Flash + 豆包兜底，修复 GOOGLE_API_KEY 配置
+v2.2  排版优化：H2颜色统一(#FF8C42)，列表flex布局，图片占位块
+v2.3  选题增强：5平台热搜(微博/抖音/腾讯/百度/全网)每日轮换 + Gemini实时搜索兜底
 """
 
 import argparse
@@ -25,6 +32,7 @@ from urllib import request, error
 # 配置
 WECHAT_API_KEY = os.environ.get("WECHAT_API_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+DOUBAO_API_KEY = os.environ.get("DOUBAO_API_KEY")
 IMGBB_API_KEY = os.environ.get("IMGBB_API_KEY")
 # 天行数据 API Key（用于获取微博热搜）
 TIANAPI_KEY = os.environ.get("TIANAPI_KEY", "a0ba59d286ea1b308f5719a4ba28d075")
@@ -115,11 +123,44 @@ def log(message):
         pass
 
 
+def call_doubao_api(prompt, max_tokens=4000):
+    """Call Doubao ARK API as fallback for content generation (OpenAI-compatible)"""
+    if not DOUBAO_API_KEY:
+        return None
+    url = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+    payload = {
+        "model": "doubao-1.5-pro-32k",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": 0.85,
+    }
+    req = request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {DOUBAO_API_KEY}",
+        },
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=90) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        return result["choices"][0]["message"]["content"]
+    except Exception as e:
+        log(f"豆包 API 调用失败: {e}")
+        return None
+
+
 def call_gemini_api(prompt, max_tokens=4000):
-    """Call Google Gemini API for content generation"""
+    """Call Google Gemini API for content generation, fallback to Doubao on failure"""
+    if not GOOGLE_API_KEY:
+        log("未设置 GOOGLE_API_KEY，尝试豆包 API 兜底")
+        return call_doubao_api(prompt, max_tokens)
+
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
+        f"gemini-2.5-flash:generateContent?key={GOOGLE_API_KEY}"
     )
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -140,49 +181,159 @@ def call_gemini_api(prompt, max_tokens=4000):
         return result["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
         log(f"Gemini API 调用失败: {e}")
-        return None
+        log("尝试豆包 API 兜底...")
+        return call_doubao_api(prompt, max_tokens)
 
 
-def fetch_weibo_hot():
-    """Fetch top Weibo trending topics via Tianapi"""
+# 5个平台热搜来源：(接口路径, title字段名, 显示名称)
+TIANAPI_SOURCES = [
+    ("weibohot",   "hotword", "微博热搜"),
+    ("douyinhot",  "word",    "抖音热搜"),
+    ("wxhottopic", "word",    "腾讯热搜"),
+    ("nethot",     "keyword", "百度热搜"),
+    ("networkhot", "title",   "全网热搜"),
+]
+
+
+def _fetch_tianapi(api_path, title_field, source_name, num=30):
+    """通用天行热搜抓取器"""
     try:
         url = (
-            f"https://apis.tianapi.com/weibohot/index?"
-            f"{urllib.parse.urlencode({'key': TIANAPI_KEY, 'num': 50})}"
+            f"https://apis.tianapi.com/{api_path}/index?"
+            f"{urllib.parse.urlencode({'key': TIANAPI_KEY, 'num': num})}"
         )
         req = request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         if data.get("code") != 200:
-            log(f"Tianapi 返回错误: {data.get('msg')}")
+            log(f"{source_name} 接口错误: {data.get('msg')}")
             return []
         hot_list = data.get("result", {}).get("list", [])
-        topics = [item.get("hotword", "").strip() for item in hot_list if item.get("hotword")]
-        log(f"获取到 {len(topics)} 条微博热搜")
+        topics = [item.get(title_field, "").strip() for item in hot_list if item.get(title_field)]
+        log(f"{source_name} 获取到 {len(topics)} 条热搜")
         return topics
     except Exception as e:
-        log(f"微博热搜获取失败: {e}")
+        log(f"{source_name} 获取失败: {e}")
         return []
 
 
-def select_topic_from_hot(hot_topics):
-    """Use Gemini to pick the best psychology angle from Weibo trending topics"""
+def fetch_hot_topics():
+    """每天按日期轮换抓取2个平台的热搜，合并去重后返回"""
+    day_num = (datetime.now() - datetime(2026, 1, 1)).days
+    idx1 = day_num % len(TIANAPI_SOURCES)
+    idx2 = (day_num + 2) % len(TIANAPI_SOURCES)  # +2 保证不同平台
+    selected = [TIANAPI_SOURCES[idx1], TIANAPI_SOURCES[idx2]]
+
+    all_topics, source_names = [], []
+    for api_path, title_field, source_name in selected:
+        topics = _fetch_tianapi(api_path, title_field, source_name)
+        all_topics.extend(topics)
+        if topics:
+            source_names.append(source_name)
+
+    # 去重保序
+    seen, unique = set(), []
+    for t in all_topics:
+        if t not in seen:
+            seen.add(t)
+            unique.append(t)
+
+    combined = "+".join(source_names) if source_names else "热搜"
+    return unique, combined
+
+
+def fetch_gemini_search_topics():
+    """Use Gemini 2.5 Flash + Google Search grounding to get real-time hot topics"""
+    if not GOOGLE_API_KEY:
+        return []
+    today = datetime.now().strftime("%Y年%m月%d日")
+    prompt = f"""今天是{today}。请用Google搜索，找出今天中国社交媒体上热议的与以下主题相关的话题：
+青少年心理健康、亲子关系、学业压力、情绪管理、教育焦虑、青春期成长。
+
+请列出10-15个具体的热议话题或社会现象，每行一个，不需要解释，直接列话题名称。
+排除娱乐八卦、政治、自然灾害类话题。"""
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GOOGLE_API_KEY}"
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "tools": [{"google_search": {}}],
+            "generationConfig": {"maxOutputTokens": 600}
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        with request.urlopen(req, timeout=20) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        text = result["candidates"][0]["content"]["parts"][0]["text"]
+        topics = [line.strip().lstrip("0123456789.-、 ") for line in text.strip().splitlines() if line.strip() and len(line.strip()) > 3]
+        topics = [t for t in topics if t][:15]
+        log(f"Gemini搜索获取到 {len(topics)} 个实时热点话题")
+        return topics
+    except Exception as e:
+        log(f"Gemini搜索话题获取失败: {e}")
+        return []
+
+
+# 学期日历选题库：按月份 + 特殊节点自动匹配时令话题
+CALENDAR_TOPICS = {
+    # 月份通用话题 (key: month 1-12)
+    1:  [{"topic": "期末考试前的焦虑怎么疏解", "category": "学业压力"},
+         {"topic": "孩子成绩出来了，怎么聊", "category": "亲子沟通"}],
+    2:  [{"topic": "开学前的「假期综合症」怎么破", "category": "学业压力"},
+         {"topic": "孩子过完年不想上学怎么办", "category": "情绪管理"}],
+    3:  [{"topic": "新学期第一个月，孩子为什么容易崩", "category": "学业压力"},
+         {"topic": "春天来了，孩子情绪也跟着乱", "category": "情绪管理"}],
+    4:  [{"topic": "春季抑郁是真实存在的，家长要知道", "category": "情绪管理"},
+         {"topic": "孩子说「活着没意思」，该怎么接这句话", "category": "情绪管理"}],
+    5:  [{"topic": "五月病：青少年为什么5月最容易崩溃", "category": "情绪管理"},
+         {"topic": "劳动节假期结束，孩子状态怎么接回来", "category": "学业压力"}],
+    6:  [{"topic": "高考季来了，陪考家长的情绪怎么管", "category": "亲子沟通"},
+         {"topic": "考前焦虑不是坏事，心理学怎么说", "category": "学业压力"}],
+    7:  [{"topic": "暑假第一周，孩子为什么会突然变懒", "category": "学业压力"},
+         {"topic": "暑假孩子天天玩手机，怎么跟他谈", "category": "亲子沟通"}],
+    8:  [{"topic": "开学前焦虑：孩子不想回学校怎么办", "category": "学业压力"},
+         {"topic": "暑假快结束了，收心要怎么收", "category": "学业压力"}],
+    9:  [{"topic": "新学期新班级，社恐的孩子如何交到朋友", "category": "人际关系"},
+         {"topic": "初一第一个月：中学和小学真的不一样", "category": "成长与变化"}],
+    10: [{"topic": "国庆长假结束，孩子假期综合症来了", "category": "情绪管理"},
+         {"topic": "青春期孩子突然不想和父母说话了", "category": "亲子沟通"}],
+    11: [{"topic": "期中考试来了，孩子压力大到失眠怎么办", "category": "学业压力"},
+         {"topic": "孩子说「我不如别人」，自信心怎么建", "category": "自我认知"}],
+    12: [{"topic": "年底了，孩子情绪为什么容易低落", "category": "情绪管理"},
+         {"topic": "元旦前后，用心理学帮孩子做年度回顾", "category": "自我认知"}],
+}
+
+
+def fetch_calendar_topic():
+    """Pick a time-sensitive topic based on current month (school calendar logic)"""
+    month = datetime.now().month
+    candidates = CALENDAR_TOPICS.get(month, [])
+    if not candidates:
+        return None
+    # 按月内天数轮换，同月不重复
+    day = datetime.now().day
+    topic = candidates[day % len(candidates)]
+    log(f"日历选题 [{month}月]: {topic['topic']} (分类: {topic['category']})")
+    return topic
+
+
+def select_topic_from_hot(hot_topics, source="热搜"):
+    """Use Gemini to pick the best psychology angle from trending topics"""
     topics_text = "\n".join(f"{i+1}. {t}" for i, t in enumerate(hot_topics[:30]))
     prompt = f"""你是"心光馨语"公众号的编辑，专注青少年心理健康和亲子关系。
 
-以下是今日微博热搜榜（前30条）：
+以下是今日{source}热点话题（前30条）：
 {topics_text}
 
-请从中选一个最适合结合青少年心理学或亲子关系来写文章的热搜话题，或者受热搜启发提炼一个相关话题。
+请从中选一个最适合结合青少年心理学或亲子关系来写文章的话题，或者受热点启发提炼一个相关话题。
 
 要求：
-- 优先选与青少年情绪、学习、亲子关系、成长直接相关的热搜
+- 优先选与青少年情绪、学习、亲子关系、成长直接相关的话题
 - 如没有直接相关的，可从社会热点（考试、就业、家庭、情感）中提炼一个心理学角度
 - 话题要能引发家长或青少年的共鸣
 - 避免选娱乐八卦、政治、灾难类话题
 
 请用 JSON 格式回复（不要有代码块标记）：
-{{"topic": "提炼后的话题", "category": "分类（学业压力/人际关系/情绪管理/亲子沟通/自我认知/趣味心理/成长与变化）", "hot_ref": "参考的热搜词"}}"""
+{{"topic": "提炼后的话题", "category": "分类（学业压力/人际关系/情绪管理/亲子沟通/自我认知/趣味心理/成长与变化）", "hot_ref": "参考的热点词"}}"""
 
     result = call_gemini_api(prompt, max_tokens=200)
     if not result:
@@ -200,16 +351,34 @@ def select_topic_from_hot(hot_topics):
 
 
 def select_topic():
-    """Select today's topic: try Weibo hot topics first, fallback to pool"""
-    # 优先尝试热搜选题
-    hot_topics = fetch_weibo_hot()
+    """Select today's topic: 4-tier funnel
+    1. 多平台热搜（每天轮换2个平台，5个平台循环覆盖）
+    2. Gemini + Google Search 实时热点
+    3. 学期日历时令话题
+    4. 话题池轮询兜底
+    """
+    # 第1层：多平台热搜（轮换）
+    hot_topics, source_name = fetch_hot_topics()
     if hot_topics:
-        topic = select_topic_from_hot(hot_topics)
+        topic = select_topic_from_hot(hot_topics, source=source_name)
         if topic:
             return topic
-        log("热搜选题失败，使用话题池兜底")
+        log("热搜选题失败，尝试 Gemini 搜索")
 
-    # 兜底：从话题池按天数轮询
+    # 第2层：Gemini + Google Search 实时热点
+    gemini_topics = fetch_gemini_search_topics()
+    if gemini_topics:
+        topic = select_topic_from_hot(gemini_topics, source="Google实时搜索")
+        if topic:
+            return topic
+        log("Gemini搜索选题失败，尝试日历选题")
+
+    # 第3层：学期日历时令话题
+    calendar_topic = fetch_calendar_topic()
+    if calendar_topic:
+        return calendar_topic
+
+    # 第4层：话题池轮询兜底
     today = datetime.now()
     epoch = datetime(2026, 1, 1)
     day_index = (today - epoch).days % len(TOPIC_POOL)
@@ -295,7 +464,7 @@ def generate_cover_image(title):
 
     imagen_url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"imagen-3.0-generate-002:predict?key={GOOGLE_API_KEY}"
+        f"imagen-3.0-fast-generate-001:predict?key={GOOGLE_API_KEY}"
     )
 
     prompt = (
@@ -387,6 +556,17 @@ def markdown_to_grace_html(markdown_content):
             html_parts.append("<p><br/></p>")
             continue
 
+        # Image placeholder — render as warm-toned placeholder block (replaced when image URL available)
+        if stripped.startswith("<!-- IMG_PLACEHOLDER"):
+            html_parts.append(
+                '<div style="width:100%;min-height:160px;margin:20px 0;'
+                "background:linear-gradient(135deg,#FFF8E7,#FFEAA7);"
+                "border-radius:12px;display:flex;align-items:center;"
+                'justify-content:center;">'
+                '<span style="color:#FF9F43;font-size:14px;">✦ 配图加载中 ✦</span></div>'
+            )
+            continue
+
         # H1 title
         if stripped.startswith("# "):
             title_text = stripped[2:].strip()
@@ -403,7 +583,7 @@ def markdown_to_grace_html(markdown_content):
         if stripped.startswith("## "):
             subtitle = stripped[3:].strip()
             html_parts.append(
-                f'<h2 style="font-size:18px;font-weight:bold;color:#E17055;'
+                f'<h2 style="font-size:18px;font-weight:bold;color:#FF8C42;'
                 f"margin:25px 0 12px;padding-left:12px;"
                 f'border-left:4px solid #FF9F43;">{subtitle}</h2>'
             )
@@ -424,7 +604,7 @@ def markdown_to_grace_html(markdown_content):
         if stripped.startswith("- ") or stripped.startswith("* "):
             if not in_list:
                 html_parts.append(
-                    '<ul style="margin:10px 0;padding-left:20px;list-style:none;">'
+                    '<ul style="margin:12px 0;padding-left:0;list-style:none;">'
                 )
                 in_list = True
             item_text = stripped[2:].strip()
@@ -435,10 +615,11 @@ def markdown_to_grace_html(markdown_content):
                 item_text,
             )
             html_parts.append(
-                f'<li style="margin:8px 0;line-height:1.8;font-size:16px;'
-                f'color:#333;padding-left:8px;">'
-                f'<span style="color:#FF9F43;margin-right:6px;">●</span>'
-                f"{item_text}</li>"
+                f'<li style="margin:10px 0;line-height:1.8;font-size:16px;'
+                f'color:#333;display:flex;align-items:flex-start;">'
+                f'<span style="color:#FF9F43;margin-right:10px;flex-shrink:0;'
+                f'font-size:18px;line-height:1.5;">●</span>'
+                f'<span>{item_text}</span></li>'
             )
             continue
 
@@ -481,11 +662,15 @@ def publish_to_wechat(title, html_content, cover_url=None):
     log("正在发布到公众号...")
 
     # Generate summary
-    summary_prompt = f"""请用一句话（20-30字）概括这篇文章的核心内容，要求温暖有吸引力，适合做公众号文章摘要：
-标题：{title}"""
-    summary = call_gemini_api(summary_prompt, max_tokens=100)
+    summary_prompt = f"""请用一句话（20-30字）概括这篇文章的核心内容，要求温暖有吸引力，适合做公众号文章摘要。
+标题：{title}
+注意：只输出摘要正文，不要加引号或任何前缀，不少于15字。"""
+    summary = call_gemini_api(summary_prompt, max_tokens=150)
     if summary:
-        summary = summary.strip().strip('"\'')
+        summary = summary.strip().strip('"\'').split('\n')[0].strip()
+        # 如果摘要太短，用默认值
+        if len(summary) < 10:
+            summary = f"新学期的孩子为什么容易情绪崩溃？心理学角度给家长一个温暖的解释"
         log(f"生成摘要: {summary}")
 
     headers = {
@@ -498,9 +683,10 @@ def publish_to_wechat(title, html_content, cover_url=None):
         "content": html_content,
         "contentFormat": "html",
         "summary": summary or "心理学小知识，温暖你的每一天",
-        "coverImage": cover_url or "",
         "articleType": "news",
     }
+    if cover_url:
+        payload["coverImage"] = cover_url
 
     try:
         req = request.Request(
