@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-心光馨语自动发布脚本 V1.0
+心光馨语自动发布脚本 V1.1
 每天 20:00 自动运行，生成闺蜜聊天式心理学短文并发布到公众号
 
 流程：
-1. 从预设话题库随机选题（或用豆包 API 生成热点话题）
-2. 用豆包 API 生成 800-1200 字闺蜜聊天式文章
+1. 从预设话题库按日期轮询选题（避免重复）
+2. 用 Google Gemini API 生成 800-1200 字闺蜜聊天式文章
 3. 用 Google Gemini Imagen 生成封面图
 4. 转换为微信公众号 HTML（grace 主题风格）
 5. 发布到"心光馨语"公众号
@@ -18,6 +18,7 @@ import os
 import random
 import re
 import sys
+import urllib.parse
 from datetime import datetime
 from urllib import request, error
 
@@ -33,38 +34,69 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR = os.path.dirname(SCRIPT_DIR)
 LOG_FILE = os.path.join(WORK_DIR, "logs", "daily-publish.log")
 
-# 话题库（当无法获取热点时使用）
+# 话题库（按天数轮询，覆盖全年不重复）
 TOPIC_POOL = [
     # 学业压力
-    {"topic": "考试前焦虑怎么办", "category": "学业压力", "keywords": "考试焦虑,紧张,深呼吸"},
-    {"topic": "孩子总是拖延写作业", "category": "学业压力", "keywords": "拖延症,作业,时间管理"},
-    {"topic": "学习没有动力怎么办", "category": "学业压力", "keywords": "学习动力,内驱力,兴趣"},
-    {"topic": "成绩下滑了怎么安慰孩子", "category": "学业压力", "keywords": "成绩,挫折,鼓励"},
+    {"topic": "考试前焦虑怎么办", "category": "学业压力"},
+    {"topic": "孩子总是拖延写作业", "category": "学业压力"},
+    {"topic": "学习没有动力怎么办", "category": "学业压力"},
+    {"topic": "成绩下滑了怎么安慰孩子", "category": "学业压力"},
+    {"topic": "孩子说学习太累了", "category": "学业压力"},
+    {"topic": "害怕开学怎么办", "category": "学业压力"},
+    {"topic": "孩子考试作弊被发现", "category": "学业压力"},
+    {"topic": "偏科严重怎么应对", "category": "学业压力"},
     # 人际关系
-    {"topic": "孩子在学校没有朋友", "category": "人际关系", "keywords": "交友,社交,孤独"},
-    {"topic": "孩子被同学排挤了", "category": "人际关系", "keywords": "排挤,校园关系,同伴"},
-    {"topic": "社恐的孩子怎么引导", "category": "人际关系", "keywords": "社交恐惧,内向,引导"},
-    {"topic": "孩子和好朋友闹翻了", "category": "人际关系", "keywords": "友谊,冲突,和解"},
+    {"topic": "孩子在学校没有朋友", "category": "人际关系"},
+    {"topic": "孩子被同学排挤了", "category": "人际关系"},
+    {"topic": "社恐的孩子怎么引导", "category": "人际关系"},
+    {"topic": "孩子和好朋友闹翻了", "category": "人际关系"},
+    {"topic": "孩子早恋了怎么办", "category": "人际关系"},
+    {"topic": "被同学嘲笑后怎么自处", "category": "人际关系"},
+    {"topic": "孩子只喜欢和手机玩", "category": "人际关系"},
+    {"topic": "孩子跟风做了不好的事", "category": "人际关系"},
     # 情绪管理
-    {"topic": "孩子动不动就发脾气", "category": "情绪管理", "keywords": "情绪失控,愤怒,管理"},
-    {"topic": "青春期情绪起伏大", "category": "情绪管理", "keywords": "青春期,情绪波动,荷尔蒙"},
-    {"topic": "孩子说不开心但不说原因", "category": "情绪管理", "keywords": "沟通,情绪表达,倾听"},
-    {"topic": "如何帮孩子缓解焦虑", "category": "情绪管理", "keywords": "焦虑,放松,呼吸法"},
+    {"topic": "孩子动不动就发脾气", "category": "情绪管理"},
+    {"topic": "青春期情绪起伏大", "category": "情绪管理"},
+    {"topic": "孩子说不开心但不说原因", "category": "情绪管理"},
+    {"topic": "如何帮孩子缓解焦虑", "category": "情绪管理"},
+    {"topic": "孩子说活着没意思怎么办", "category": "情绪管理"},
+    {"topic": "孩子一受批评就哭", "category": "情绪管理"},
+    {"topic": "孩子特别容易受伤", "category": "情绪管理"},
+    {"topic": "孩子突然变得很沉默", "category": "情绪管理"},
     # 亲子沟通
-    {"topic": "孩子说烦死了其实在说什么", "category": "亲子沟通", "keywords": "叛逆,理解,倾听"},
-    {"topic": "为什么孩子不愿意和我说话", "category": "亲子沟通", "keywords": "沟通障碍,信任,倾听"},
-    {"topic": "怎么和青春期孩子好好说话", "category": "亲子沟通", "keywords": "青春期,沟通技巧,尊重"},
-    {"topic": "孩子嫌我唠叨怎么办", "category": "亲子沟通", "keywords": "唠叨,边界感,信任"},
+    {"topic": "孩子说烦死了其实在说什么", "category": "亲子沟通"},
+    {"topic": "为什么孩子不愿意和我说话", "category": "亲子沟通"},
+    {"topic": "怎么和青春期孩子好好说话", "category": "亲子沟通"},
+    {"topic": "孩子嫌我唠叨怎么办", "category": "亲子沟通"},
+    {"topic": "孩子总说你不理解我", "category": "亲子沟通"},
+    {"topic": "孩子不愿分享学校的事", "category": "亲子沟通"},
+    {"topic": "和孩子聊天总变成争吵", "category": "亲子沟通"},
+    {"topic": "孩子对父母撒谎怎么办", "category": "亲子沟通"},
     # 自我认知
-    {"topic": "孩子总觉得自己不够好", "category": "自我认知", "keywords": "自卑,自我价值,肯定"},
-    {"topic": "青春期孩子特别在意外表", "category": "自我认知", "keywords": "外貌焦虑,自信,接纳"},
-    {"topic": "孩子不知道自己想要什么", "category": "自我认知", "keywords": "迷茫,自我探索,目标"},
+    {"topic": "孩子总觉得自己不够好", "category": "自我认知"},
+    {"topic": "青春期孩子特别在意外表", "category": "自我认知"},
+    {"topic": "孩子不知道自己想要什么", "category": "自我认知"},
+    {"topic": "孩子过于追求完美", "category": "自我认知"},
+    {"topic": "孩子特别怕失败", "category": "自我认知"},
+    {"topic": "孩子迷上了某个爱好家长不理解", "category": "自我认知"},
+    {"topic": "孩子说自己太普通了", "category": "自我认知"},
+    {"topic": "孩子总拿自己跟别人比", "category": "自我认知"},
     # 趣味心理
-    {"topic": "为什么越禁止越想做", "category": "趣味心理", "keywords": "禁果效应,心理学,逆反"},
-    {"topic": "为什么考试时会突然忘记答案", "category": "趣味心理", "keywords": "舌尖现象,记忆,紧张"},
-    {"topic": "为什么排队时总觉得别的队快", "category": "趣味心理", "keywords": "心理偏差,等待焦虑,认知"},
-    {"topic": "晚上的烦恼为什么早上就消失了", "category": "趣味心理", "keywords": "睡眠,情绪调节,认知重评"},
-    {"topic": "为什么心情不好的时候想吃甜食", "category": "趣味心理", "keywords": "情绪性进食,多巴胺,安慰"},
+    {"topic": "为什么越禁止越想做", "category": "趣味心理"},
+    {"topic": "为什么考试时会突然忘记答案", "category": "趣味心理"},
+    {"topic": "为什么排队时总觉得别的队快", "category": "趣味心理"},
+    {"topic": "晚上的烦恼为什么早上就消失了", "category": "趣味心理"},
+    {"topic": "为什么心情不好的时候想吃甜食", "category": "趣味心理"},
+    {"topic": "为什么我们总记得没做完的事", "category": "趣味心理"},
+    {"topic": "为什么越说不紧张越紧张", "category": "趣味心理"},
+    {"topic": "为什么人在难过时喜欢听悲歌", "category": "趣味心理"},
+    # 成长与变化
+    {"topic": "孩子突然开窍了是怎么回事", "category": "成长与变化"},
+    {"topic": "为什么孩子小时候很开朗长大却内向", "category": "成长与变化"},
+    {"topic": "孩子进入叛逆期的信号", "category": "成长与变化"},
+    {"topic": "高中生为什么特别需要隐私", "category": "成长与变化"},
+    {"topic": "青春期孩子为何喜欢冒险", "category": "成长与变化"},
+    {"topic": "孩子突然变得很独立怎么看", "category": "成长与变化"},
 ]
 
 
@@ -110,17 +142,18 @@ def call_gemini_api(prompt, max_tokens=4000):
 
 
 def select_topic():
-    """Select today's topic from pool"""
+    """Select today's topic by cycling through pool (avoids repeats within one full cycle)"""
     today = datetime.now()
-    # Use date as seed to avoid same topic on retry
-    random.seed(today.strftime("%Y%m%d"))
-    topic = random.choice(TOPIC_POOL)
-    log(f"选题: {topic['topic']} (分类: {topic['category']})")
+    # 以2026-01-01为起点，按天数取模轮询，保证每个话题都被用到
+    epoch = datetime(2026, 1, 1)
+    day_index = (today - epoch).days % len(TOPIC_POOL)
+    topic = TOPIC_POOL[day_index]
+    log(f"选题 [第{day_index + 1}/{len(TOPIC_POOL)}个]: {topic['topic']} (分类: {topic['category']})")
     return topic
 
 
 def generate_article(topic_info):
-    """Generate article using Doubao API"""
+    """Generate article using Gemini API"""
     log("正在生成文章...")
 
     prompt = f"""你是"心光馨语"公众号的作者，写作风格是闺蜜聊天式——像朋友分享经验一样讲心理学知识。
@@ -252,7 +285,6 @@ def generate_cover_image(title):
 def upload_to_imgbb(image_bytes):
     """Upload image to IMGBB and return URL"""
     try:
-        import urllib.parse
         data = urllib.parse.urlencode({
             "key": IMGBB_API_KEY,
             "image": base64.b64encode(image_bytes).decode("utf-8"),
