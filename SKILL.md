@@ -1,6 +1,6 @@
 ---
 name: teen-psychology-insights
-version: 3.2.0
+version: 3.3.0
 description: 心光馨语 - 轻松有趣的心理学公众号内容生成。闺蜜聊天式风格，800-1200字短文，温暖治愈系配图，自动发布到微信公众号。触发词："青少年心理洞察"、"青少年心理"、"写心理文章"、"心光馨语"、"teen psychology insights"。
 author: rulanlai
 tags: [psychology, teen, parenting, education, wechat]
@@ -34,9 +34,13 @@ tags: [psychology, teen, parenting, education, wechat]
 |------|-----|
 | 排版工具 | baoyu-markdown-to-html（grace 主题） |
 | 主色调 | 暖橙 #FF9F43 + 浅金 #FFEAA7 |
+| 背景色 | 奶白 #FFFBF5 |
+| 标题字体 | 宋体（Songti SC / STSong） |
+| 正文字体 | 黑体（PingFang SC / 微软雅黑） |
 | 标题样式 | 圆角卡片包裹，柔和阴影 |
 | 引用块 | 左侧暖色竖线 + 浅底色 |
-| 正文字号 | 16px，行距 1.8 |
+| 正文字号 | 16px，行距 2.0 |
+| 正文字色 | 暖棕 #3D3020 |
 | 整体风格 | 优雅暖光，像一杯暖茶 |
 
 ## 核心定位
@@ -144,6 +148,8 @@ ELSE
 ```markdown
 # [有趣/温暖/引发好奇的标题]
 
+<!-- IMG_PLACEHOLDER: {主体: "[呼应标题的场景]", 动作/状态: "[状态]", 场景/环境: "[环境]", 风格: "温暖治愈系水彩插画，暖橙浅金色调"} -->
+
 ## 开头：生活小场景（150-200字）
 - 用"你有没有过这种时候……"或"昨天刷到一个帖子……"开头
 - 一个日常的、有共鸣的小场景
@@ -162,6 +168,8 @@ ELSE
 - 每个方法用一句话概括 + 一个具体场景
 - 比如："下次孩子说'我不想写作业'，试试先说'嗯，累了吧'而不是'赶紧写'"
 
+<!-- IMG_PLACEHOLDER（可选，内容较长时添加）: {主体: "[Tips场景]", 动作/状态: "[状态]", 场景/环境: "[环境]", 风格: "温暖治愈系水彩插画，暖橙浅金色调"} -->
+
 ## 结尾：温暖收尾（100-150字）
 - 不说教，不总结
 - 用一句温暖的话结束
@@ -172,7 +180,7 @@ ELSE
 
 | 维度 | 要求 |
 |------|------|
-| 语气 | 像闺蜜聊天，口语化，可以用"哈哈"、"真的"、"你说是不是" |
+| 语气 | 像闺蜜聊天，口语化，多用"真的"、"你说是不是"等词增加亲切感；"啊"、"哈"、"哈哈"等语气词克制使用，全篇不超过2处 |
 | 长度 | **800-1200字**，绝不超过1500字 |
 | 段落 | 短段落，每段不超过3-4行，手机阅读友好 |
 | 表达 | 零术语，全部大白话，"依恋理论"要说成"孩子为啥老黏你" |
@@ -187,9 +195,10 @@ ELSE
 
 **配图占位符：**
 
-整篇文章放置 **2个** 配图占位符：
-- 1个在中间知识部分之后
-- 1个在Tips部分之后
+整篇文章放置 **2-3个** 配图占位符：
+- 1个在文章**开头**（标题下方，开场图）
+- 1个在中间知识部分之后（必放）
+- 1个在Tips部分之后（可选，内容较长时添加）
 
 占位符格式：
 `<!-- IMG_PLACEHOLDER: {主体: "[人物或场景]", 动作/状态: "[状态]", 场景/环境: "[环境]", 风格: "温暖治愈系水彩插画，暖橙浅金色调"} -->`
@@ -231,7 +240,7 @@ python3 ~/.claude/skills/teen-psychology-insights/scripts/generate_image.py cove
 ```bash
 python3 ~/.claude/skills/teen-psychology-insights/scripts/generate_image.py article \
   --file "/path/to/article.md" \
-  --max-images 2 \
+  --max-images 3 \
   --size 1024x1024
 ```
 
@@ -243,7 +252,10 @@ python3 ~/.claude/skills/teen-psychology-insights/scripts/generate_image.py arti
 
 ```
 调用 baoyu-markdown-to-html，主题选择 grace，
-配色方案使用暖橙 #FF9F43 + 浅金 #FFEAA7
+配色方案：暖橙 #FF9F43 + 浅金 #FFEAA7
+背景色：奶白 #FFFBF5
+字体：标题用宋体（Songti SC），正文用黑体（PingFang SC）
+正文字号：16px，行距 2.0，正文字色 #3D3020
 ```
 
 ### Step 6: （可选）发布到微信公众号
@@ -315,7 +327,7 @@ python3 ~/.claude/skills/teen-psychology-insights/scripts/publish.py publish \
 - [ ] 有2-3个实用小建议
 - [ ] 段落短，手机阅读友好
 - [ ] 温暖不鸡汤，真诚不矫情
-- [ ] 配图风格统一（暖橙浅金水彩）
+- [ ] 配图布局：开头1张 + 中间1-2张，风格统一（暖橙浅金水彩）
 - [ ] 排版使用 grace 主题
 
 ## 信息来源推荐
@@ -333,5 +345,6 @@ python3 ~/.claude/skills/teen-psychology-insights/scripts/publish.py publish \
 
 | 版本 | 日期 | 更新内容 |
 |------|------|----------|
+| 3.3 | 2026-03-12 | 排版升级：背景改为奶白#FFFBF5，混合字体（标题宋体+正文黑体），行距2.0，字色#3D3020；语气词克制（全篇≤2处）；配图改为开头1张+中间1-2张 |
 | 2.0 | 2026-03-10 | 全面升级：公众号改为"心光馨语"，内容从深度长文改为闺蜜聊天式800-1200字短文，排版用grace主题+暖橙浅金色调，配图接入Google Gemini API |
 | 1.0 | 2026-02-02 | 初始版本，支持青少年心理深度文章生成 |
