@@ -36,7 +36,7 @@ DOUBAO_API_KEY = os.environ.get("DOUBAO_API_KEY")
 IMGBB_API_KEY = os.environ.get("IMGBB_API_KEY")
 # 天行数据 API Key（用于获取微博热搜）
 TIANAPI_KEY = os.environ.get("TIANAPI_KEY", "a0ba59d286ea1b308f5719a4ba28d075")
-APPID = "wx5f15d70a0882dc9b"
+APPID = "wx52189e9b012018e1"
 API_BASE = "https://wx.limyai.com/api/openapi"
 
 # 工作目录

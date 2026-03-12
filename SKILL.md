@@ -15,8 +15,8 @@ tags: [psychology, teen, parenting, education, wechat]
 | 项目 | 值 |
 |------|-----|
 | 公众号名称 | 心光馨语 |
-| AppID | wx5f15d70a0882dc9b |
-| API Key | 环境变量 `WECHAT_API_KEY`（值：`xhs_f8b7a51a40b4df34429014e228018417`） |
+| AppID | wx52189e9b012018e1 |
+| API Key | 环境变量 `WECHAT_API_KEY`（值：`xhs_a565dc0d2929da8ec203ed7d7b372dbd`） |
 
 ## 配图 API 配置
 
@@ -252,7 +252,7 @@ python3 ~/.claude/skills/teen-psychology-insights/scripts/generate_image.py arti
 
 ```
 调用 baoyu-post-to-wechat，参数：
-  appid: wx5f15d70a0882dc9b
+  appid: wx52189e9b012018e1
   title: [文章标题]
   content: [Step 5 生成的 HTML]
   summary: [文章摘要，一句话]
@@ -262,7 +262,7 @@ python3 ~/.claude/skills/teen-psychology-insights/scripts/generate_image.py arti
 或使用本地发布脚本：
 ```bash
 python3 ~/.claude/skills/teen-psychology-insights/scripts/publish.py publish \
-  --appid "wx5f15d70a0882dc9b" \
+  --appid "wx52189e9b012018e1" \
   --title "[文章标题]" \
   --content-file "/path/to/article.md" \
   --summary "文章摘要" \
