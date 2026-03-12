@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-心光馨语自动发布脚本 v2.3
+心光馨语自动发布脚本 v3.1
 每天自动运行，生成闺蜜聊天式心理学短文并发布到公众号
 
 流程：
 1. 选题（4层漏斗：5平台热搜轮换 → Gemini实时搜索 → 日历时令 → 话题池）
 2. 用 Gemini 2.5 Flash 生成 800-1200 字闺蜜聊天式文章（豆包兜底）
-3. 用 Gemini Imagen 3 生成封面图
-4. 转换为微信公众号 HTML（暖橙色调 #FF9F43）
+3. 用 Gemini Imagen 4 生成封面图 + 2张正文配图，上传 imgbb 获取 URL
+4. 转换为微信公众号 HTML（暖橙色调 #FF9F43），配图替换占位符
 5. 发布到"心光馨语"公众号
 
 版本历史：
@@ -16,6 +16,8 @@ v2.0  全面升级：公众号改"心光馨语"，闺蜜聊天式，grace排版+
 v2.1  API升级：Gemini 2.5 Flash + 豆包兜底，修复 GOOGLE_API_KEY 配置
 v2.2  排版优化：H2颜色统一(#FF8C42)，列表flex布局，图片占位块
 v2.3  选题增强：5平台热搜(微博/抖音/腾讯/百度/全网)每日轮换 + Gemini实时搜索兜底
+v3.0  投产：修复发布bug，更新凭证，GitHub Actions 北京11:00定时运营
+v3.1  配图修复：封面图+正文2张配图，Imagen 4 + imgbb 上传
 """
 
 import argparse
@@ -430,6 +432,8 @@ def generate_article(topic_info):
 - 不要用"根据研究表明"之类的学术表达
 - 用"心理学家做过一个特别有意思的实验"代替"研究显示"
 - 用"下次试试先闭嘴听完，真的有用"代替"建议采取积极倾听策略"
+- 在"中间"部分末尾插入一行：<!-- IMG_PLACEHOLDER_1 -->
+- 在"实用Tips"部分末尾插入一行：<!-- IMG_PLACEHOLDER_2 -->
 
 直接输出文章内容，不要输出任何说明。"""
 
@@ -464,7 +468,7 @@ def generate_cover_image(title):
 
     imagen_url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"imagen-3.0-fast-generate-001:predict?key={GOOGLE_API_KEY}"
+        f"imagen-4.0-generate-001:predict?key={GOOGLE_API_KEY}"
     )
 
     prompt = (
@@ -505,7 +509,7 @@ def generate_cover_image(title):
 
         # Upload to IMGBB if key available
         if IMGBB_API_KEY:
-            return upload_to_imgbb(image_bytes)
+            return upload_to_imgbb(image_bytes, label="封面图")
 
         return None
 
@@ -518,7 +522,7 @@ def generate_cover_image(title):
         return None
 
 
-def upload_to_imgbb(image_bytes):
+def upload_to_imgbb(image_bytes, label="图片"):
     """Upload image to IMGBB and return URL"""
     try:
         data = urllib.parse.urlencode({
@@ -534,18 +538,76 @@ def upload_to_imgbb(image_bytes):
             result = json.loads(resp.read().decode("utf-8"))
         if result.get("success"):
             url = result["data"]["url"]
-            log(f"封面图上传成功: {url}")
+            log(f"{label}上传成功: {url}")
             return url
     except Exception as e:
-        log(f"IMGBB 上传失败: {e}")
+        log(f"IMGBB 上传失败 ({label}): {e}")
     return None
 
 
-def markdown_to_grace_html(markdown_content):
+def generate_body_images(topic_info, title):
+    """Generate 2 body images based on topic, upload to imgbb, return list of URLs"""
+    if not GOOGLE_API_KEY or not IMGBB_API_KEY:
+        log("跳过正文配图（需要 GOOGLE_API_KEY + IMGBB_API_KEY）")
+        return []
+
+    log("正在生成正文配图...")
+
+    imagen_url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"imagen-4.0-fast-generate-001:predict?key={GOOGLE_API_KEY}"
+    )
+
+    # 2张配图：知识场景图 + 实用场景图
+    prompts = [
+        (
+            f"Warm watercolor illustration showing a teenager and parent having a gentle conversation "
+            f"about '{topic_info['topic']}'. Soft warm orange and light gold tones, cozy home setting, "
+            "heartwarming mood, gentle light, emotionally warm. High quality."
+        ),
+        (
+            "Warm watercolor illustration showing a caring parent listening to a child, "
+            "soft encouraging atmosphere, practical advice scene. "
+            "Soft warm orange and light gold tones, cozy, heartwarming. High quality."
+        ),
+    ]
+
+    urls = []
+    for i, prompt in enumerate(prompts):
+        payload = {
+            "instances": [{"prompt": prompt}],
+            "parameters": {"sampleCount": 1, "aspectRatio": "4:3"},
+        }
+        req = request.Request(
+            imagen_url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with request.urlopen(req, timeout=90) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+            predictions = result.get("predictions", [])
+            if predictions:
+                image_bytes = base64.b64decode(predictions[0]["bytesBase64Encoded"])
+                url = upload_to_imgbb(image_bytes, label=f"正文配图{i+1}")
+                if url:
+                    urls.append(url)
+        except error.HTTPError as e:
+            log(f"正文配图{i+1} 生成失败: {e.read().decode()[:150]}")
+        except Exception as e:
+            log(f"正文配图{i+1} 生成异常: {e}")
+
+    log(f"正文配图完成: {len(urls)}/2 张")
+    return urls
+
+
+def markdown_to_grace_html(markdown_content, body_images=None):
     """Convert Markdown to WeChat-compatible HTML with grace theme styling"""
     lines = markdown_content.strip().split("\n")
     html_parts = []
     in_list = False
+    placeholder_index = [0]  # mutable counter for closures
 
     for line in lines:
         stripped = line.strip()
@@ -556,15 +618,24 @@ def markdown_to_grace_html(markdown_content):
             html_parts.append("<p><br/></p>")
             continue
 
-        # Image placeholder — render as warm-toned placeholder block (replaced when image URL available)
+        # Image placeholder — replace with real image if available, else show warm block
         if stripped.startswith("<!-- IMG_PLACEHOLDER"):
-            html_parts.append(
-                '<div style="width:100%;min-height:160px;margin:20px 0;'
-                "background:linear-gradient(135deg,#FFF8E7,#FFEAA7);"
-                "border-radius:12px;display:flex;align-items:center;"
-                'justify-content:center;">'
-                '<span style="color:#FF9F43;font-size:14px;">✦ 配图加载中 ✦</span></div>'
-            )
+            idx = placeholder_index[0]
+            placeholder_index[0] += 1
+            url = (body_images or [])[idx] if body_images and idx < len(body_images) else None
+            if url:
+                html_parts.append(
+                    f'<img src="{url}" style="width:100%;border-radius:12px;'
+                    'margin:20px 0;display:block;" />'
+                )
+            else:
+                html_parts.append(
+                    '<div style="width:100%;min-height:160px;margin:20px 0;'
+                    "background:linear-gradient(135deg,#FFF8E7,#FFEAA7);"
+                    "border-radius:12px;display:flex;align-items:center;"
+                    'justify-content:center;">'
+                    '<span style="color:#FF9F43;font-size:14px;">✦ 配图 ✦</span></div>'
+                )
             continue
 
         # H1 title
@@ -759,9 +830,12 @@ def main():
     # 3. Generate cover image
     cover_url = generate_cover_image(article["title"])
 
+    # 3.5 Generate body images
+    body_images = generate_body_images(topic_info, article["title"])
+
     # 4. Convert to HTML
     log("正在转换 HTML（grace 主题）...")
-    html_content = markdown_to_grace_html(article["content"])
+    html_content = markdown_to_grace_html(article["content"], body_images=body_images)
     log(f"HTML 内容长度: {len(html_content)} 字符")
 
     # 5. Save article locally
