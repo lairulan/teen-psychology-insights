@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-心光馨语自动发布脚本 v3.1
+心光馨语自动发布脚本 v3.3
 每天自动运行，生成闺蜜聊天式心理学短文并发布到公众号
 
 流程：
@@ -338,18 +338,26 @@ def select_topic_from_hot(hot_topics, source="热搜"):
 请用 JSON 格式回复（不要有代码块标记）：
 {{"topic": "提炼后的话题", "category": "分类（学业压力/人际关系/情绪管理/亲子沟通/自我认知/趣味心理/成长与变化）", "hot_ref": "参考的热点词"}}"""
 
-    result = call_gemini_api(prompt, max_tokens=200)
+    result = call_gemini_api(prompt, max_tokens=500)
     if not result:
         return None
     try:
         # 清理可能的 markdown 代码块
-        result = re.sub(r"```(?:json)?|```", "", result).strip()
-        data = json.loads(result)
+        cleaned = re.sub(r"```(?:json)?|```", "", result).strip()
+        # 尝试直接解析
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            # 用正则提取第一个完整的 JSON 对象（防止截断或多余文字）
+            m = re.search(r'\{[^{}]*"topic"\s*:[^{}]*\}', cleaned, re.DOTALL)
+            if not m:
+                raise ValueError(f"未找到有效 JSON, 原始: {cleaned[:150]}")
+            data = json.loads(m.group(0))
         if data.get("topic"):
             log(f"热搜选题: {data['topic']} (参考热搜: {data.get('hot_ref', '')})")
             return {"topic": data["topic"], "category": data.get("category", "热点"), "hot_ref": data.get("hot_ref", "")}
     except Exception as e:
-        log(f"热搜选题解析失败: {e}, 原始返回: {result[:100]}")
+        log(f"热搜选题解析失败: {e}, 原始返回: {result[:150]}")
     return None
 
 
