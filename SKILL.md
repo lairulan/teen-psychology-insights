@@ -1,6 +1,6 @@
 ---
 name: teen-psychology-insights
-version: 3.3.0
+version: 3.4.0
 description: 心光馨语 - 轻松有趣的心理学公众号内容生成。闺蜜聊天式风格，800-1200字短文，温暖治愈系配图，自动发布到微信公众号。触发词："青少年心理洞察"、"青少年心理"、"写心理文章"、"心光馨语"、"teen psychology insights"。
 author: rulanlai
 tags: [psychology, teen, parenting, education, wechat]
@@ -345,6 +345,7 @@ python3 ~/.claude/skills/teen-psychology-insights/scripts/publish.py publish \
 
 | 版本 | 日期 | 更新内容 |
 |------|------|----------|
+| 3.4 | 2026-03-14 | 选题防重复：修复热搜JSON解析失败（截断修复+纯文本兜底），日历选题池扩至每月15个，新增7天去重机制 |
 | 3.3 | 2026-03-12 | 排版升级：背景改为奶白#FFFBF5，混合字体（标题宋体+正文黑体），行距2.0，字色#3D3020；语气词克制（全篇≤2处）；配图改为开头1张+中间1-2张 |
 | 2.0 | 2026-03-10 | 全面升级：公众号改为"心光馨语"，内容从深度长文改为闺蜜聊天式800-1200字短文，排版用grace主题+暖橙浅金色调，配图接入Google Gemini API |
 | 1.0 | 2026-02-02 | 初始版本，支持青少年心理深度文章生成 |
