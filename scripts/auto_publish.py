@@ -1116,7 +1116,7 @@ def publish_to_wechat(title, html_content, cover_url=None):
             headers=headers,
             method="POST",
         )
-        with request.urlopen(req, timeout=30) as resp:
+        with request.urlopen(req, timeout=90) as resp:
             result = json.loads(resp.read().decode("utf-8"))
         log(f"API 响应: {result}")
         success = result.get("success", False)
