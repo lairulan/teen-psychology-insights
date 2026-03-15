@@ -23,7 +23,7 @@ tags: [psychology, teen, parenting, education, wechat]
 | 项目 | 值 |
 |------|-----|
 | 服务商 | Google Gemini Imagen |
-| API Key | 环境变量 `GOOGLE_API_KEY`（值：`AIzaSyAtW4l_gdC_Fxf6M9St_i1Zt-FKvSRYUeI`） |
+| API Key | 环境变量 `GOOGLE_API_KEY`（值：`AQ.Ab8RN6LKLi1gwnul0aGEdgXzolnfIKYhiovTTsf-yr36z8yDeg`） |
 | 封面图尺寸 | 1792x1024 |
 | 正文配图尺寸 | 1024x1024 |
 | 配图风格 | 温暖治愈系水彩插画，暖橙浅金色调 |

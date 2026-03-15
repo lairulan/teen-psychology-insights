@@ -37,7 +37,7 @@ claude "心光馨语 发布:是"
 
 ```bash
 # 配图生成（Google Gemini Imagen）
-export GOOGLE_API_KEY='AIzaSyAtW4l_gdC_Fxf6M9St_i1Zt-FKvSRYUeI'
+export GOOGLE_API_KEY='AQ.Ab8RN6LKLi1gwnul0aGEdgXzolnfIKYhiovTTsf-yr36z8yDeg'
 
 # 微信公众号发布
 export WECHAT_API_KEY='xhs_a565dc0d2929da8ec203ed7d7b372dbd'

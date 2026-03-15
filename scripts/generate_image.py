@@ -15,7 +15,7 @@ from urllib import request, error
 
 
 GOOGLE_API_KEY = os.environ.get(
-    "GOOGLE_API_KEY", "AIzaSyAtW4l_gdC_Fxf6M9St_i1Zt-FKvSRYUeI"
+    "GOOGLE_API_KEY", "AQ.Ab8RN6LKLi1gwnul0aGEdgXzolnfIKYhiovTTsf-yr36z8yDeg"
 )
 IMAGEN_URL = (
     f"https://generativelanguage.googleapis.com/v1beta/models/"
