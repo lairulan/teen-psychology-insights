@@ -1078,20 +1078,24 @@ def markdown_to_grace_html(markdown_content, body_images=None):
     return html
 
 
-def publish_to_wechat(title, html_content, cover_url=None):
+def publish_to_wechat(title, html_content, cover_url=None, article_text=""):
     """Publish to WeChat Official Account"""
     log("正在发布到公众号...")
 
-    # Generate summary
-    summary_prompt = f"""请用一句话（20-30字）概括这篇文章的核心内容，要求温暖有吸引力，适合做公众号文章摘要。
+    # Generate summary — 传入文章正文前200字作为上下文
+    text_snippet = article_text[:200] if article_text else ""
+    summary_prompt = f"""请为这篇公众号文章写一句摘要（20-30字），要求温暖有吸引力。
 标题：{title}
-注意：只输出摘要正文，不要加引号或任何前缀，不少于15字。"""
+正文摘录：{text_snippet}
+要求：只输出摘要正文，不要加引号或前缀。摘要必须与文章主题相关，15-30字。"""
     summary = call_gemini_api(summary_prompt, max_tokens=150)
     if summary:
         summary = summary.strip().strip('"\'').split('\n')[0].strip()
-        # 如果摘要太短，用默认值
-        if len(summary) < 10:
-            summary = f"新学期的孩子为什么容易情绪崩溃？心理学角度给家长一个温暖的解释"
+    # fallback: 从标题提取摘要
+    if not summary or len(summary) < 10:
+        summary = title[:30] if len(title) > 15 else f"心理学小知识 | {title}"
+        log(f"摘要回退到标题: {summary}")
+    else:
         log(f"生成摘要: {summary}")
 
     headers = {
@@ -1116,7 +1120,7 @@ def publish_to_wechat(title, html_content, cover_url=None):
             headers=headers,
             method="POST",
         )
-        with request.urlopen(req, timeout=90) as resp:
+        with request.urlopen(req, timeout=180) as resp:
             result = json.loads(resp.read().decode("utf-8"))
         log(f"API 响应: {result}")
         success = result.get("success", False)
@@ -1211,7 +1215,8 @@ def main():
         sys.exit(0)
 
     # 6. Publish
-    success = publish_to_wechat(article["title"], html_content, cover_url)
+    success = publish_to_wechat(article["title"], html_content, cover_url,
+                               article_text=article["content"])
 
     if success:
         log("✅ 发布成功！")
