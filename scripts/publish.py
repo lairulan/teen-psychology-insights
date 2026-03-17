@@ -9,7 +9,7 @@ import os
 import re
 import sys
 
-APPID = "wx52189e9b012018e1"
+APPID = os.environ.get("WECHAT_APP_ID", "")
 ACCOUNT_NAME = "心光馨语"
 
 

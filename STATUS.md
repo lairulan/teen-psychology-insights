@@ -12,7 +12,7 @@
 - GitHub Secrets 已配置：WECHAT_API_KEY / GOOGLE_API_KEY / IMGBB_API_KEY / DOUBAO_API_KEY
 
 ## 关键配置
-- 公众号：心光馨语 / AppID：wx52189e9b012018e1
+- 公众号：心光馨语 / AppID：${WECHAT_APP_ID}
 - 排版：grace主题，背景#FFFBF5，标题宋体，正文黑体16px行距2.0，字色#3D3020
 - 图片流程：Imagen 4 → 豆包 Seedream 兜底 → imgbb 永久托管
 
