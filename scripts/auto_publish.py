@@ -133,7 +133,7 @@ def call_doubao_api(prompt, max_tokens=4000):
         return None
     url = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
     payload = {
-        "model": "doubao-1.5-pro-32k",
+        "model": "doubao-seed-1-6-lite-251015",
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": 0.85,
@@ -859,7 +859,7 @@ def generate_image_doubao(prompt, size="1024x1024", label="图片"):
     if not DOUBAO_API_KEY or not IMGBB_API_KEY:
         return None
     payload = {
-        "model": "doubao-seedream-3-0-t2i-250415",
+        "model": "doubao-seedream-4-5-251128",
         "prompt": prompt,
         "size": size,
         "n": 1,
