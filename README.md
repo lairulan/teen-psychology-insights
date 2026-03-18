@@ -37,10 +37,10 @@ claude "心光馨语 发布:是"
 
 ```bash
 # 配图生成（Google Gemini Imagen）
-export GOOGLE_API_KEY='AQ.Ab8RN6LKLi1gwnul0aGEdgXzolnfIKYhiovTTsf-yr36z8yDeg'
+export GOOGLE_API_KEY='your_google_api_key_here'
 
 # 微信公众号发布
-export WECHAT_API_KEY='xhs_a565dc0d2929da8ec203ed7d7b372dbd'
+export WECHAT_API_KEY='your_wechat_api_key_here'
 ```
 
 ### 输出目录

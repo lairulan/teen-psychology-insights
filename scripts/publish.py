@@ -48,7 +48,7 @@ def publish_to_wechat(title, content_file, summary, cover, draft=True):
     api_key = os.environ.get("WECHAT_API_KEY")
     if not api_key:
         print("\nError: WECHAT_API_KEY not set", file=sys.stderr)
-        print("   export WECHAT_API_KEY='xhs_a565dc0d2929da8ec203ed7d7b372dbd'")
+        print("   export WECHAT_API_KEY='your_wechat_api_key_here'")
         sys.exit(1)
 
     if not os.path.exists(content_file):

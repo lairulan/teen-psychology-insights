@@ -7,7 +7,7 @@
 
 ## 环境
 - 脚本：`scripts/auto_publish.py`（唯一入口）
-- 手动触发：`cd ~/.claude/skills/teen-psychology-insights && WECHAT_API_KEY="xhs_a565dc0d2929da8ec203ed7d7b372dbd" python3 scripts/auto_publish.py`
+- 手动触发：`cd ~/.claude/skills/teen-psychology-insights && WECHAT_API_KEY="$WECHAT_API_KEY" python3 scripts/auto_publish.py`
 - GitHub Actions cron：`0 3 * * *`（UTC）= 北京时间 11:00
 - GitHub Secrets 已配置：WECHAT_API_KEY / GOOGLE_API_KEY / IMGBB_API_KEY / DOUBAO_API_KEY
 
