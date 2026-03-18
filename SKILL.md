@@ -16,14 +16,14 @@ tags: [psychology, teen, parenting, education, wechat]
 |------|-----|
 | 公众号名称 | 心光馨语 |
 | AppID | ${WECHAT_APP_ID} |
-| API Key | 环境变量 `WECHAT_API_KEY`（值：`xhs_a565dc0d2929da8ec203ed7d7b372dbd`） |
+| API Key | 环境变量 `WECHAT_API_KEY`（值：`your_wechat_api_key_here`） |
 
 ## 配图 API 配置
 
 | 项目 | 值 |
 |------|-----|
 | 服务商 | Google Gemini Imagen |
-| API Key | 环境变量 `GOOGLE_API_KEY`（值：`AQ.Ab8RN6LKLi1gwnul0aGEdgXzolnfIKYhiovTTsf-yr36z8yDeg`） |
+| API Key | 环境变量 `GOOGLE_API_KEY`（值：`your_google_api_key_here`） |
 | 封面图尺寸 | 1792x1024 |
 | 正文配图尺寸 | 1024x1024 |
 | 配图风格 | 温暖治愈系水彩插画，暖橙浅金色调 |
