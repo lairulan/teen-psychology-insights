@@ -824,11 +824,11 @@ def generate_cover_image(title):
         body = e.read().decode("utf-8", errors="replace")
         log(f"Imagen API 错误 {e.code}: {body[:200]}")
         log("尝试豆包 Seedream 兜底...")
-        return generate_image_doubao(prompt, size="1280x720", label="封面图")
+        return generate_image_doubao(prompt, size="2560x1440", label="封面图")
     except Exception as e:
         log(f"封面图生成异常: {e}")
         log("尝试豆包 Seedream 兜底...")
-        return generate_image_doubao(prompt, size="1280x720", label="封面图")
+        return generate_image_doubao(prompt, size="2560x1440", label="封面图")
 
 
 def upload_to_imgbb(image_bytes, label="图片"):
@@ -854,7 +854,7 @@ def upload_to_imgbb(image_bytes, label="图片"):
     return None
 
 
-def generate_image_doubao(prompt, size="1024x1024", label="图片"):
+def generate_image_doubao(prompt, size="1920x1920", label="图片"):
     """Generate image via Doubao Seedream, download temp URL and upload to imgbb"""
     if not DOUBAO_API_KEY or not IMGBB_API_KEY:
         return None
@@ -941,12 +941,12 @@ def generate_body_images(topic_info, title):
                     urls.append(url)
         except error.HTTPError as e:
             log(f"正文配图{i+1} Imagen失败，切换豆包: {e.read().decode()[:100]}")
-            url = generate_image_doubao(prompt, size="1024x1024", label=f"正文配图{i+1}")
+            url = generate_image_doubao(prompt, size="1920x1920", label=f"正文配图{i+1}")
             if url:
                 urls.append(url)
         except Exception as e:
             log(f"正文配图{i+1} Imagen异常，切换豆包: {e}")
-            url = generate_image_doubao(prompt, size="1024x1024", label=f"正文配图{i+1}")
+            url = generate_image_doubao(prompt, size="1920x1920", label=f"正文配图{i+1}")
             if url:
                 urls.append(url)
 
