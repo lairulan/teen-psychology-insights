@@ -1,27 +1,22 @@
 #!/usr/bin/env python3
 """
-心光馨语配图生成脚本
-使用 Google Gemini Imagen API 生成温暖治愈系水彩插画
+心光馨语 - 配图生成脚本
+调用中央 generate-image 技能（AI Gateway + IMGBB）
+保留温暖治愈系风格提示词
 """
 
 import argparse
-import base64
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime
-from urllib import request, error
 
+# 中央生图脚本路径
+CENTRAL_SCRIPT = os.path.expanduser("~/.claude/skills/generate-image/scripts/generate_image.py")
 
-GOOGLE_API_KEY = os.environ.get(
-    "GOOGLE_API_KEY", ""
-)
-IMAGEN_URL = (
-    f"https://generativelanguage.googleapis.com/v1beta/models/"
-    f"imagen-3.0-generate-002:predict?key={GOOGLE_API_KEY}"
-)
-
+# 图片输出目录
 OUTPUT_BASE = os.path.expanduser("~/Documents/Obsidian/心光馨语/images")
 
 STYLE_PROMPTS = {
@@ -45,51 +40,42 @@ STYLE_PROMPTS = {
 }
 
 
-def call_imagen(prompt, aspect_ratio="1:1"):
-    """Call Google Imagen API to generate an image."""
-    payload = {
-        "instances": [{"prompt": prompt}],
-        "parameters": {
-            "sampleCount": 1,
-            "aspectRatio": aspect_ratio,
-            "personGeneration": "allow_all",
-        },
-    }
-
-    req = request.Request(
-        IMAGEN_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+def call_central_generate(prompt, output=None, retry=3):
+    """调用中央生图脚本"""
+    cmd = [
+        sys.executable, CENTRAL_SCRIPT,
+        prompt,
+        "--json",
+        "--upload-imgbb",
+        "--retry", str(retry)
+    ]
+    if output:
+        cmd.extend(["--output", output])
 
     try:
-        with request.urlopen(req, timeout=120) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-    except error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        print(f"API error {e.code}: {body}", file=sys.stderr)
-        return None
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        stdout = result.stdout.strip()
+        if not stdout:
+            return {"success": False, "error": f"中央脚本无输出. stderr: {result.stderr[:500]}"}
 
-    predictions = result.get("predictions", [])
-    if not predictions:
-        print("No predictions returned", file=sys.stderr)
-        return None
+        lines = stdout.split('\n')
+        json_lines = []
+        for line in reversed(lines):
+            json_lines.insert(0, line)
+            if line.strip().startswith('{'):
+                break
 
-    return base64.b64decode(predictions[0]["bytesBase64Encoded"])
-
-
-def save_image(image_bytes, output_path):
-    """Save image bytes to file."""
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, "wb") as f:
-        f.write(image_bytes)
-    print(f"   Saved: {output_path}")
-    return output_path
+        return json.loads('\n'.join(json_lines))
+    except json.JSONDecodeError:
+        return {"success": False, "error": "JSON 解析失败"}
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "生图超时"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 def generate_cover_image(title, style="warm", size="1792x1024"):
-    """Generate a cover image for the article."""
+    """生成封面图"""
     print(f"Generating cover image...")
     print(f"   Title: {title}")
     print(f"   Style: {style}")
@@ -99,23 +85,27 @@ def generate_cover_image(title, style="warm", size="1792x1024"):
         f'Illustration for an article titled "{title}". '
         f"{base_style}. "
         "Include elements related to teenagers, family, growth, and psychology. "
-        "Emotionally warm and empathetic. High quality, 4K."
+        "Emotionally warm and empathetic. High quality, 4K. "
+        "NO text, NO Chinese characters, NO typography."
     )
-
-    print(f"   Prompt: {prompt[:100]}...")
-
-    image_bytes = call_imagen(prompt, aspect_ratio="16:9")
-    if not image_bytes:
-        print("   Failed to generate cover image")
-        return None
 
     today = datetime.now().strftime("%Y-%m-%d")
     output_path = os.path.join(OUTPUT_BASE, f"{today}-cover.png")
-    return save_image(image_bytes, output_path)
+
+    result = call_central_generate(prompt, output=output_path, retry=3)
+    if result.get("success"):
+        url = result.get("imgbb_url") or result.get("url")
+        local = result.get("local_path", output_path)
+        print(f"   Cover URL: {url}")
+        print(f"   Local: {local}")
+        return local
+    else:
+        print(f"   Failed: {result.get('error')}")
+        return None
 
 
 def extract_image_placeholders(markdown_file):
-    """Extract image placeholders from a Markdown file."""
+    """从 Markdown 文件提取图片占位符"""
     with open(markdown_file, "r", encoding="utf-8") as f:
         content = f.read()
 
@@ -128,28 +118,21 @@ def extract_image_placeholders(markdown_file):
         for item in match.group(1).split(","):
             if ":" in item:
                 key, value = item.split(":", 1)
-                key = key.strip().strip('"').strip()
-                value = value.strip().strip('"').strip()
-                info[key] = value
-        placeholders.append(
-            {"position": match.start(), "full_text": match.group(0), "info": info}
-        )
+                info[key.strip().strip('"')] = value.strip().strip('"')
+        placeholders.append({"position": match.start(), "full_text": match.group(0), "info": info})
     return placeholders
 
 
 def generate_article_images(markdown_file, max_images=2, size="1024x1024"):
-    """Generate inline images for article sections."""
+    """为文章生成配图"""
     print(f"Generating article images...")
-    print(f"   File: {markdown_file}")
 
     placeholders = extract_image_placeholders(markdown_file)
     if not placeholders:
         print("   No placeholders found")
         return []
 
-    print(f"   Found {len(placeholders)} placeholder(s)")
     placeholders = placeholders[:max_images]
-
     today = datetime.now().strftime("%Y-%m-%d")
     generated = []
 
@@ -166,47 +149,42 @@ def generate_article_images(markdown_file, max_images=2, size="1024x1024"):
             f"{info.get('动作/状态', '')}, "
             f"{info.get('场景/环境', '')}, "
             f"{info.get('风格', 'Warm healing watercolor illustration, soft warm orange and light gold tones')}. "
-            "High quality, emotionally warm, suitable for psychology article."
+            "High quality, emotionally warm, suitable for psychology article. "
+            "NO text, NO Chinese characters."
         )
 
-        image_bytes = call_imagen(prompt, aspect_ratio="1:1")
-        if not image_bytes:
-            print(f"     Failed to generate image {i}")
-            continue
-
         output_path = os.path.join(OUTPUT_BASE, f"{today}-article-{i}.png")
-        save_image(image_bytes, output_path)
-        generated.append(output_path)
+        result = call_central_generate(prompt, output=output_path, retry=3)
 
-        # Replace placeholder with image markdown
-        img_md = f"![配图{i}]({output_path})"
-        content = content.replace(ph["full_text"], img_md)
+        if result.get("success"):
+            url = result.get("imgbb_url") or result.get("url")
+            local = result.get("local_path", output_path)
+            generated.append(local)
+            # 用 IMGBB URL 替换占位符（公众号可直接引用）
+            img_md = f"![配图{i}]({url})"
+            content = content.replace(ph["full_text"], img_md)
+            print(f"     URL: {url}")
+        else:
+            print(f"     Failed: {result.get('error')}")
 
-    # Write back with images embedded
     with open(markdown_file, "w", encoding="utf-8") as f:
         f.write(content)
 
-    print(f"\n   Generated {len(generated)} image(s), updated markdown file")
+    print(f"\n   Generated {len(generated)} image(s)")
     return generated
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Generate images for 心光馨语 articles using Google Imagen",
-    )
-    subparsers = parser.add_subparsers(dest="command", help="Command")
+    parser = argparse.ArgumentParser(description="心光馨语 配图生成（中央引擎）")
+    subparsers = parser.add_subparsers(dest="command")
 
-    cover_p = subparsers.add_parser("cover", help="Generate cover image")
-    cover_p.add_argument("--title", required=True, help="Article title")
-    cover_p.add_argument(
-        "--style",
-        default="warm",
-        choices=["warm", "modern", "minimalist", "creative"],
-    )
+    cover_p = subparsers.add_parser("cover")
+    cover_p.add_argument("--title", required=True)
+    cover_p.add_argument("--style", default="warm", choices=["warm", "modern", "minimalist", "creative"])
     cover_p.add_argument("--size", default="1792x1024")
 
-    article_p = subparsers.add_parser("article", help="Generate article images")
-    article_p.add_argument("--file", required=True, help="Markdown file path")
+    article_p = subparsers.add_parser("article")
+    article_p.add_argument("--file", required=True)
     article_p.add_argument("--max-images", type=int, default=2)
     article_p.add_argument("--size", default="1024x1024")
 
@@ -217,19 +195,12 @@ def main():
         sys.exit(1)
 
     if args.command == "cover":
-        result = generate_cover_image(args.title, args.style, args.size)
-        if result:
-            print(f"\nCover image: {result}")
-        else:
-            sys.exit(1)
+        generate_cover_image(args.title, args.style, args.size)
     elif args.command == "article":
         if not os.path.exists(args.file):
             print(f"File not found: {args.file}", file=sys.stderr)
             sys.exit(1)
-        results = generate_article_images(args.file, args.max_images, args.size)
-        if not results:
-            print("No images generated", file=sys.stderr)
-            sys.exit(1)
+        generate_article_images(args.file, args.max_images, args.size)
 
 
 if __name__ == "__main__":
