@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
 """
 心光馨语 - 配图生成脚本
-调用中央 generate-image 技能（AI Gateway + IMGBB）
-保留温暖治愈系风格提示词
+直接调用 AI Gateway（https://ai-gateway.happycapy.ai）+ IMGBB 上传
+无本地路径依赖，可在 GitHub Actions 中正常运行
 """
 
 import argparse
+import base64
 import json
 import os
 import re
-import subprocess
 import sys
+import time
 from datetime import datetime
+from urllib import request as urllib_request
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 
-# 中央生图脚本路径
-CENTRAL_SCRIPT = os.path.expanduser("~/.claude/skills/generate-image/scripts/generate_image.py")
+API_BASE = "https://ai-gateway.happycapy.ai/api/v1"
+DEFAULT_MODEL = "google/gemini-3.1-flash-image-preview"
 
-# 图片输出目录
 OUTPUT_BASE = os.path.expanduser("~/Documents/Obsidian/心光馨语/images")
 
 STYLE_PROMPTS = {
@@ -40,38 +43,108 @@ STYLE_PROMPTS = {
 }
 
 
-def call_central_generate(prompt, output=None, retry=3):
-    """调用中央生图脚本"""
-    cmd = [
-        sys.executable, CENTRAL_SCRIPT,
-        prompt,
-        "--json",
-        "--upload-imgbb",
-        "--retry", str(retry)
-    ]
-    if output:
-        cmd.extend(["--output", output])
+def _generate_image_b64(prompt, model=DEFAULT_MODEL, retry=3):
+    """直接调用 AI Gateway 生成图片，返回 base64 数据"""
+    api_key = os.environ.get("AI_GATEWAY_API_KEY")
+    if not api_key:
+        return {"success": False, "error": "未设置 AI_GATEWAY_API_KEY"}
+
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "response_format": "b64_json",
+        "n": 1,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "Origin": "https://trickle.so",
+        "User-Agent": "Mozilla/5.0 (compatible; AI-Gateway-Client/1.0)",
+    }
+
+    for attempt in range(retry):
+        try:
+            req = urllib_request.Request(
+                f"{API_BASE}/images/generations",
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            with urllib_request.urlopen(req, timeout=120) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+            if "data" in data and data["data"]:
+                b64 = data["data"][0].get("b64_json")
+                if b64:
+                    return {"success": True, "b64_json": b64}
+            return {"success": False, "error": "API 响应无图片数据"}
+
+        except HTTPError as e:
+            err = e.read().decode("utf-8")
+            if attempt < retry - 1:
+                time.sleep(5)
+                continue
+            return {"success": False, "error": f"HTTP {e.code}: {err[:300]}"}
+        except Exception as e:
+            if attempt < retry - 1:
+                time.sleep(5)
+                continue
+            return {"success": False, "error": str(e)}
+
+    return {"success": False, "error": "超过重试次数"}
+
+
+def _upload_imgbb(b64_data):
+    """上传 base64 图片到 IMGBB，返回 URL"""
+    api_key = os.environ.get("IMGBB_API_KEY")
+    if not api_key:
+        return None
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-        stdout = result.stdout.strip()
-        if not stdout:
-            return {"success": False, "error": f"中央脚本无输出. stderr: {result.stderr[:500]}"}
+        body = urlencode({"key": api_key, "image": b64_data})
+        req = urllib_request.Request(
+            "https://api.imgbb.com/1/upload",
+            data=body.encode("utf-8"),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with urllib_request.urlopen(req, timeout=60) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        if result.get("success"):
+            return result["data"]["url"]
+    except Exception:
+        pass
+    return None
 
-        lines = stdout.split('\n')
-        json_lines = []
-        for line in reversed(lines):
-            json_lines.insert(0, line)
-            if line.strip().startswith('{'):
-                break
 
-        return json.loads('\n'.join(json_lines))
-    except json.JSONDecodeError:
-        return {"success": False, "error": "JSON 解析失败"}
-    except subprocess.TimeoutExpired:
-        return {"success": False, "error": "生图超时"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+def generate_and_upload(prompt, retry=3, output=None):
+    """生成图片并上传到 IMGBB，返回统一格式结果"""
+    result = _generate_image_b64(prompt, retry=retry)
+    if not result.get("success"):
+        return result
+
+    b64 = result["b64_json"]
+
+    # 保存本地文件（如果指定了路径）
+    local_path = None
+    if output:
+        try:
+            os.makedirs(os.path.dirname(output), exist_ok=True)
+            with open(output, "wb") as f:
+                f.write(base64.b64decode(b64))
+            local_path = output
+        except Exception:
+            pass
+
+    imgbb_url = _upload_imgbb(b64)
+
+    return {
+        "success": True,
+        "imgbb_url": imgbb_url,
+        "url": imgbb_url,
+        "local_path": local_path,
+        "source": "ai-gateway",
+    }
 
 
 def generate_cover_image(title, style="warm", size="1792x1024"):
@@ -92,7 +165,7 @@ def generate_cover_image(title, style="warm", size="1792x1024"):
     today = datetime.now().strftime("%Y-%m-%d")
     output_path = os.path.join(OUTPUT_BASE, f"{today}-cover.png")
 
-    result = call_central_generate(prompt, output=output_path, retry=3)
+    result = generate_and_upload(prompt, retry=3, output=output_path)
     if result.get("success"):
         url = result.get("imgbb_url") or result.get("url")
         local = result.get("local_path", output_path)
@@ -154,13 +227,12 @@ def generate_article_images(markdown_file, max_images=2, size="1024x1024"):
         )
 
         output_path = os.path.join(OUTPUT_BASE, f"{today}-article-{i}.png")
-        result = call_central_generate(prompt, output=output_path, retry=3)
+        result = generate_and_upload(prompt, retry=3, output=output_path)
 
         if result.get("success"):
             url = result.get("imgbb_url") or result.get("url")
             local = result.get("local_path", output_path)
             generated.append(local)
-            # 用 IMGBB URL 替换占位符（公众号可直接引用）
             img_md = f"![配图{i}]({url})"
             content = content.replace(ph["full_text"], img_md)
             print(f"     URL: {url}")
@@ -175,7 +247,7 @@ def generate_article_images(markdown_file, max_images=2, size="1024x1024"):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="心光馨语 配图生成（中央引擎）")
+    parser = argparse.ArgumentParser(description="心光馨语 配图生成（AI Gateway 直连）")
     subparsers = parser.add_subparsers(dest="command")
 
     cover_p = subparsers.add_parser("cover")
