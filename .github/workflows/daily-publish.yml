@@ -31,14 +31,15 @@ jobs:
       - name: 生成并发布心理学文章
         env:
           WECHAT_API_KEY: ${{ secrets.WECHAT_API_KEY }}
-          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          DOUBAO_API_KEY: ${{ secrets.DOUBAO_API_KEY }}
           IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
         run: |
           set -x
           cd scripts
 
-          if [ -z "$AI_GATEWAY_API_KEY" ]; then
-            echo "错误：未设置 AI_GATEWAY_API_KEY"
+          if [ -z "$GOOGLE_API_KEY" ] && [ -z "$DOUBAO_API_KEY" ]; then
+            echo "错误：未设置 GOOGLE_API_KEY 或 DOUBAO_API_KEY"
             exit 1
           fi
 
