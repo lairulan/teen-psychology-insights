@@ -28,10 +28,17 @@ import json
 import os
 import random
 import re
+import ssl
 import sys
 import urllib.parse
 from datetime import datetime, timedelta
 from urllib import request, error
+
+# SSL 配置: wx.limyai.com 证书 2026-03-20 过期，临时跳过验证
+# TODO: 证书续期后删除此 context
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
 
 # 配置
 WECHAT_API_KEY = os.environ.get("WECHAT_API_KEY")
@@ -40,7 +47,7 @@ DOUBAO_API_KEY = os.environ.get("DOUBAO_API_KEY")
 IMGBB_API_KEY = os.environ.get("IMGBB_API_KEY")
 # 天行数据 API Key（用于获取微博热搜）
 TIANAPI_KEY = os.environ.get("TIANAPI_KEY", "a0ba59d286ea1b308f5719a4ba28d075")
-APPID = os.environ.get("WECHAT_APP_ID", "wx52189e9b012018e1")  # 心光馨语
+APPID = "wx52189e9b012018e1"
 API_BASE = "https://wx.limyai.com/api/openapi"
 
 # 工作目录
@@ -133,7 +140,7 @@ def call_doubao_api(prompt, max_tokens=4000):
         return None
     url = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
     payload = {
-        "model": "doubao-seed-1-6-lite-251015",
+        "model": "doubao-1.5-pro-32k",
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": 0.85,
@@ -741,6 +748,10 @@ def generate_article(topic_info):
 - 用"下次试试先闭嘴听完，真的有用"代替"建议采取积极倾听策略"
 - 在"中间"部分末尾插入一行：<!-- IMG_PLACEHOLDER_1 -->
 - 在"实用Tips"部分末尾插入一行：<!-- IMG_PLACEHOLDER_2 -->
+- 实用Tips部分的每个方法必须用这个格式：**编号. 方法名：** 具体说明（例如：**1. 给他一个放空时间：** 孩子放学回家……）
+- 每个方法下面如果有具体场景，用缩进列表：  * **具体场景：** xxxxxx
+- 可以在文章中任意位置用 > 引用一句温暖的话作为金句高亮（可选，不强制）
+- 结尾前可以用一句 > ✦ 温暖收尾语 作为点睛句（可选）
 
 直接输出文章内容，不要输出任何说明。"""
 
@@ -824,11 +835,11 @@ def generate_cover_image(title):
         body = e.read().decode("utf-8", errors="replace")
         log(f"Imagen API 错误 {e.code}: {body[:200]}")
         log("尝试豆包 Seedream 兜底...")
-        return generate_image_doubao(prompt, size="2560x1440", label="封面图")
+        return generate_image_doubao(prompt, size="1280x720", label="封面图")
     except Exception as e:
         log(f"封面图生成异常: {e}")
         log("尝试豆包 Seedream 兜底...")
-        return generate_image_doubao(prompt, size="2560x1440", label="封面图")
+        return generate_image_doubao(prompt, size="1280x720", label="封面图")
 
 
 def upload_to_imgbb(image_bytes, label="图片"):
@@ -854,17 +865,15 @@ def upload_to_imgbb(image_bytes, label="图片"):
     return None
 
 
-def generate_image_doubao(prompt, size="1920x1920", label="图片"):
+def generate_image_doubao(prompt, size="1024x1024", label="图片"):
     """Generate image via Doubao Seedream, download temp URL and upload to imgbb"""
     if not DOUBAO_API_KEY or not IMGBB_API_KEY:
         return None
     payload = {
-        "model": "doubao-seedream-4-5-251128",
+        "model": "doubao-seedream-3-0-t2i-250415",
         "prompt": prompt,
-        "response_format": "url",
         "size": size,
-        "guidance_scale": 3,
-        "watermark": False,
+        "n": 1,
     }
     req = request.Request(
         "https://ark.cn-beijing.volces.com/api/v3/images/generations",
@@ -941,12 +950,12 @@ def generate_body_images(topic_info, title):
                     urls.append(url)
         except error.HTTPError as e:
             log(f"正文配图{i+1} Imagen失败，切换豆包: {e.read().decode()[:100]}")
-            url = generate_image_doubao(prompt, size="1920x1920", label=f"正文配图{i+1}")
+            url = generate_image_doubao(prompt, size="1024x1024", label=f"正文配图{i+1}")
             if url:
                 urls.append(url)
         except Exception as e:
             log(f"正文配图{i+1} Imagen异常，切换豆包: {e}")
-            url = generate_image_doubao(prompt, size="1920x1920", label=f"正文配图{i+1}")
+            url = generate_image_doubao(prompt, size="1024x1024", label=f"正文配图{i+1}")
             if url:
                 urls.append(url)
 
@@ -955,34 +964,88 @@ def generate_body_images(topic_info, title):
 
 
 def markdown_to_grace_html(markdown_content, body_images=None):
-    """Convert Markdown to WeChat-compatible HTML with grace theme styling"""
+    """Convert Markdown to WeChat-compatible HTML with grace theme styling (v2)"""
     lines = markdown_content.strip().split("\n")
     html_parts = []
     in_list = False
-    placeholder_index = [0]  # mutable counter for closures
+    in_tip_card = False  # track numbered tip card state
+    placeholder_index = [0]
+    h2_count = [0]  # track H2 occurrences for decorative dividers
+
+    def _bold(text):
+        """Process **bold** markers in text"""
+        return re.sub(
+            r"\*\*(.+?)\*\*",
+            r'<strong style="color:#FF9F43;font-weight:bold;">\1</strong>',
+            text,
+        )
+
+    def _italic(text):
+        """Process *italic* markers in text (single asterisk only)"""
+        return re.sub(
+            r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)",
+            r'<em style="color:#888;">\1</em>',
+            text,
+        )
+
+    def _inline_format(text):
+        """Apply all inline formatting: bold then italic"""
+        return _italic(_bold(text))
+
+    def _close_tip_card():
+        """Close an open tip card"""
+        nonlocal in_tip_card
+        if in_tip_card:
+            html_parts.append("</div>")
+            in_tip_card = False
+
+    def _close_list():
+        """Close an open list"""
+        nonlocal in_list
+        if in_list:
+            html_parts.append("</ul>")
+            in_list = False
 
     for line in lines:
         stripped = line.strip()
+        raw_indent = len(line) - len(line.lstrip())
+
         if not stripped:
-            if in_list:
-                html_parts.append("</ul>")
-                in_list = False
-            html_parts.append("<p><br/></p>")
+            _close_list()
+            _close_tip_card()
+            # Compact spacer instead of <br/>
+            html_parts.append(
+                '<div style="margin:8px 0;"></div>'
+            )
             continue
 
-        # Image placeholder — replace with real image if available, else show warm block
+        # --- separator → decorative divider
+        if stripped in ("---", "***", "___"):
+            _close_list()
+            _close_tip_card()
+            html_parts.append(
+                '<div style="text-align:center;margin:28px 0 8px;">'
+                '<span style="color:#FFEAA7;font-size:18px;letter-spacing:14px;">'
+                '\u00b7 \u00b7 \u00b7</span></div>'
+            )
+            continue
+
+        # Image placeholder
         if stripped.startswith("<!-- IMG_PLACEHOLDER"):
+            _close_list()
+            _close_tip_card()
             idx = placeholder_index[0]
             placeholder_index[0] += 1
             url = (body_images or [])[idx] if body_images and idx < len(body_images) else None
             if url:
                 html_parts.append(
+                    f'<div style="margin:24px 0;text-align:center;">'
                     f'<img src="{url}" style="width:100%;border-radius:12px;'
-                    'margin:20px 0;display:block;" />'
+                    f'display:block;" /></div>'
                 )
             else:
                 html_parts.append(
-                    '<div style="width:100%;min-height:160px;margin:20px 0;'
+                    '<div style="width:100%;min-height:160px;margin:24px 0;'
                     "background:linear-gradient(135deg,#FFF8E7,#FFEAA7);"
                     "border-radius:12px;display:flex;align-items:center;"
                     'justify-content:center;">'
@@ -991,113 +1054,214 @@ def markdown_to_grace_html(markdown_content, body_images=None):
             continue
 
         # H1 title
-        if stripped.startswith("# "):
+        if stripped.startswith("# ") and not stripped.startswith("## "):
+            _close_list()
+            _close_tip_card()
             title_text = stripped[2:].strip()
             html_parts.append(
                 f'<h1 style="text-align:center;font-size:22px;font-weight:bold;'
-                f"color:#FF9F43;margin:30px 0 20px;padding:15px 20px;"
+                f"color:#FF9F43;margin:30px 0 24px;padding:16px 20px;"
                 f"background:linear-gradient(135deg,#FFF8E7,#FFF3D0);"
-                f'border-radius:12px;box-shadow:0 2px 8px rgba(255,159,67,0.15);">'
+                f"border-radius:12px;box-shadow:0 2px 8px rgba(255,159,67,0.15);"
+                f'letter-spacing:1px;">'
                 f"{title_text}</h1>"
             )
             continue
 
-        # H2 subtitle
+        # H2 subtitle — with decorative divider before it (except first H2)
         if stripped.startswith("## "):
+            _close_list()
+            _close_tip_card()
             subtitle = stripped[3:].strip()
+            h2_count[0] += 1
+            if h2_count[0] > 1:
+                html_parts.append(
+                    '<div style="text-align:center;margin:32px 0 8px;">'
+                    '<span style="color:#FFEAA7;font-size:18px;letter-spacing:14px;">'
+                    '\u00b7 \u00b7 \u00b7</span></div>'
+                )
             html_parts.append(
                 f'<h2 style="font-size:18px;font-weight:bold;color:#FF8C42;'
-                f"margin:25px 0 12px;padding-left:12px;"
-                f'border-left:4px solid #FF9F43;">{subtitle}</h2>'
+                f"margin:20px 0 14px;padding:8px 0 8px 14px;"
+                f"border-left:4px solid #FF9F43;"
+                f'letter-spacing:0.5px;">{subtitle}</h2>'
             )
             continue
 
-        # Blockquote
+        # Blockquote — distinguish highlight quotes vs normal quotes
         if stripped.startswith("> "):
+            _close_list()
+            _close_tip_card()
             quote_text = stripped[2:].strip()
+            # Highlight quote: > ✦ ... or > ** ...
+            if quote_text.startswith("\u2726") or quote_text.startswith("**"):
+                quote_text = quote_text.lstrip("\u2726 ")
+                quote_text = _inline_format(quote_text)
+                html_parts.append(
+                    f'<div style="margin:22px 0;padding:18px 24px;text-align:center;'
+                    f"background:linear-gradient(135deg,#FFF8E7,#FFF3D0);"
+                    f"border-radius:12px;box-shadow:0 2px 8px rgba(255,159,67,0.1);"
+                    f'font-size:16px;line-height:2.0;color:#E8852E;font-weight:500;'
+                    f'letter-spacing:0.5px;">'
+                    f'<span style="color:#FFEAA7;margin-right:6px;">✦</span>'
+                    f"{quote_text}"
+                    f'<span style="color:#FFEAA7;margin-left:6px;">✦</span>'
+                    f"</div>"
+                )
+            else:
+                quote_text = _inline_format(quote_text)
+                html_parts.append(
+                    f'<blockquote style="margin:16px 0;padding:14px 18px;'
+                    f"background:#FFF8E7;border-left:4px solid #FFEAA7;"
+                    f"border-radius:0 8px 8px 0;color:#666;font-size:15px;"
+                    f'line-height:2.0;letter-spacing:0.5px;">'
+                    f"{quote_text}</blockquote>"
+                )
+            continue
+
+        # Numbered tip pattern: **1. Title：** or **1. Title:**
+        tip_match = re.match(
+            r"\*\*(\d+)\.\s*(.+?)[：:]\*\*\s*(.*)", stripped
+        )
+        if tip_match:
+            _close_list()
+            _close_tip_card()
+            tip_num = tip_match.group(1)
+            tip_title = tip_match.group(2)
+            tip_rest = tip_match.group(3).strip()
+            # Open tip card
+            in_tip_card = True
             html_parts.append(
-                f'<blockquote style="margin:15px 0;padding:12px 18px;'
-                f"background:#FFF8E7;border-left:4px solid #FFEAA7;"
-                f'border-radius:0 8px 8px 0;color:#666;font-size:15px;line-height:1.8;">'
-                f"{quote_text}</blockquote>"
+                f'<div style="margin:16px 0;padding:16px 18px;'
+                f"background:linear-gradient(135deg,#FFFAF0,#FFF8E7);"
+                f"border-left:4px solid #FF9F43;border-radius:0 10px 10px 0;"
+                f'box-shadow:0 1px 4px rgba(255,159,67,0.08);">'
+                f'<div style="font-size:16px;font-weight:bold;color:#FF8C42;'
+                f'margin-bottom:8px;line-height:1.6;">'
+                f'<span style="display:inline-block;width:24px;height:24px;'
+                f"background:#FF9F43;color:#fff;border-radius:50%;text-align:center;"
+                f'line-height:24px;font-size:13px;margin-right:8px;">'
+                f"{tip_num}</span>{tip_title}</div>"
+            )
+            if tip_rest:
+                tip_rest = _inline_format(tip_rest)
+                html_parts.append(
+                    f'<p style="font-size:15px;line-height:2.0;color:#555;'
+                    f'margin:4px 0 0;text-align:justify;letter-spacing:0.5px;">'
+                    f"{tip_rest}</p>"
+                )
+            continue
+
+        # Sub-item inside tip card: indented * or - with **具体场景：**
+        if in_tip_card and (stripped.startswith("* ") or stripped.startswith("- ")):
+            item_text = stripped[2:].strip()
+            item_text = _inline_format(item_text)
+            html_parts.append(
+                f'<p style="font-size:15px;line-height:2.0;color:#666;'
+                f"margin:6px 0 0;padding-left:32px;"
+                f'text-align:justify;letter-spacing:0.5px;">'
+                f"{item_text}</p>"
             )
             continue
 
-        # List items
+        # Scene description item (e.g. *   **具体场景：** ...) — render as indented block
+        # Works both inside and outside tip cards, handles old article format
+        scene_match = re.match(r'^[-*]\s+\*\*具体场景[：:]\*\*\s*(.*)', stripped)
+        if scene_match:
+            _close_list()
+            scene_text = _inline_format(scene_match.group(1).strip())
+            html_parts.append(
+                f'<p style="font-size:15px;line-height:2.0;color:#666;'
+                f"margin:6px 0 0;padding-left:32px;"
+                f'text-align:justify;letter-spacing:0.5px;">'
+                f'<strong style="color:#FF9F43;">具体场景：</strong>'
+                f"{scene_text}</p>"
+            )
+            continue
+
+        # Regular list items (outside tip cards)
         if stripped.startswith("- ") or stripped.startswith("* "):
+            _close_tip_card()
+            is_sub = raw_indent >= 2 or stripped.startswith("  ")
             if not in_list:
                 html_parts.append(
-                    '<ul style="margin:12px 0;padding-left:0;list-style:none;">'
+                    '<ul style="margin:14px 0;padding-left:0;list-style:none;">'
                 )
                 in_list = True
-            item_text = stripped[2:].strip()
-            # Bold processing
-            item_text = re.sub(
-                r"\*\*(.+?)\*\*",
-                r'<strong style="color:#FF9F43;">\1</strong>',
-                item_text,
-            )
-            html_parts.append(
-                f'<li style="margin:10px 0;line-height:1.8;font-size:16px;'
-                f'color:#333;display:flex;align-items:flex-start;">'
-                f'<span style="color:#FF9F43;margin-right:10px;flex-shrink:0;'
-                f'font-size:18px;line-height:1.5;">●</span>'
-                f'<span>{item_text}</span></li>'
-            )
+            # Extract text after list marker (- or *) safely
+            item_text = re.sub(r'^[-*]\s+', '', stripped)
+            item_text = _inline_format(item_text)
+            if is_sub:
+                # Nested sub-item: smaller, indented
+                html_parts.append(
+                    f'<li style="margin:6px 0;line-height:2.0;font-size:15px;'
+                    f'color:#666;padding-left:28px;display:flex;align-items:flex-start;">'
+                    f'<span style="color:#FFEAA7;margin-right:8px;flex-shrink:0;'
+                    f'font-size:14px;line-height:1.8;">◦</span>'
+                    f'<span>{item_text}</span></li>'
+                )
+            else:
+                html_parts.append(
+                    f'<li style="margin:10px 0;line-height:2.0;font-size:16px;'
+                    f'color:#3D3020;display:flex;align-items:flex-start;'
+                    f'letter-spacing:0.5px;">'
+                    f'<span style="color:#FF9F43;margin-right:10px;flex-shrink:0;'
+                    f'font-size:16px;line-height:1.8;">\u25cf</span>'
+                    f'<span>{item_text}</span></li>'
+                )
             continue
 
-        if in_list:
-            html_parts.append("</ul>")
-            in_list = False
+        _close_list()
+        _close_tip_card()
 
-        # Regular paragraph with bold processing
-        text = stripped
-        text = re.sub(
-            r"\*\*(.+?)\*\*",
-            r'<strong style="color:#FF9F43;">\1</strong>',
-            text,
-        )
+        # Regular paragraph — justified, no indent, warm brown text
+        text = _inline_format(stripped)
         html_parts.append(
-            f'<p style="font-size:16px;line-height:1.8;color:#333;'
-            f'margin:10px 0;text-align:justify;">{text}</p>'
+            f'<p style="font-size:16px;line-height:2.0;color:#3D3020;'
+            f'margin:14px 0;text-align:justify;letter-spacing:0.5px;">'
+            f"{text}</p>"
         )
 
-    if in_list:
-        html_parts.append("</ul>")
+    _close_list()
+    _close_tip_card()
 
-    # Wrap in container
+    # Wrap in container with enhanced footer
     body = "\n".join(html_parts)
     html = (
-        f'<section style="max-width:600px;margin:0 auto;padding:20px;'
+        f'<section style="max-width:600px;margin:0 auto;padding:20px 24px;'
         f'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;">'
         f"{body}"
-        f'<p style="text-align:center;margin-top:30px;padding:15px;'
-        f"font-size:13px;color:#999;border-top:1px solid #FFEAA7;\">"
-        f"心光馨语 | 像闺蜜一样聊心理</p>"
+        # Enhanced footer
+        f'<div style="margin-top:36px;padding-top:20px;text-align:center;'
+        f'border-top:1px solid #FFEAA7;">'
+        f'<div style="margin-bottom:6px;">'
+        f'<span style="color:#FFEAA7;font-size:14px;letter-spacing:6px;">'
+        f'\u2500\u2500 \u2726 \u2500\u2500</span></div>'
+        f'<p style="font-size:15px;color:#FF9F43;font-weight:bold;'
+        f'margin:4px 0 2px;letter-spacing:1px;">\u5fc3\u5149\u99a8\u8bed</p>'
+        f'<p style="font-size:12px;color:#bbb;margin:0;letter-spacing:0.5px;">'
+        f'\u50cf\u95fa\u871c\u4e00\u6837\u804a\u5fc3\u7406</p>'
+        f"</div>"
         f"</section>"
     )
 
     return html
 
 
-def publish_to_wechat(title, html_content, cover_url=None, article_text=""):
+def publish_to_wechat(title, html_content, cover_url=None):
     """Publish to WeChat Official Account"""
     log("正在发布到公众号...")
 
-    # Generate summary — 传入文章正文前200字作为上下文
-    text_snippet = article_text[:200] if article_text else ""
-    summary_prompt = f"""请为这篇公众号文章写一句摘要（20-30字），要求温暖有吸引力。
+    # Generate summary
+    summary_prompt = f"""请用一句话（20-30字）概括这篇文章的核心内容，要求温暖有吸引力，适合做公众号文章摘要。
 标题：{title}
-正文摘录：{text_snippet}
-要求：只输出摘要正文，不要加引号或前缀。摘要必须与文章主题相关，15-30字。"""
+注意：只输出摘要正文，不要加引号或任何前缀，不少于15字。"""
     summary = call_gemini_api(summary_prompt, max_tokens=150)
     if summary:
         summary = summary.strip().strip('"\'').split('\n')[0].strip()
-    # fallback: 从标题提取摘要
-    if not summary or len(summary) < 10:
-        summary = title[:30] if len(title) > 15 else f"心理学小知识 | {title}"
-        log(f"摘要回退到标题: {summary}")
-    else:
+        # 如果摘要太短，用默认值
+        if len(summary) < 10:
+            summary = f"新学期的孩子为什么容易情绪崩溃？心理学角度给家长一个温暖的解释"
         log(f"生成摘要: {summary}")
 
     headers = {
@@ -1122,7 +1286,7 @@ def publish_to_wechat(title, html_content, cover_url=None, article_text=""):
             headers=headers,
             method="POST",
         )
-        with request.urlopen(req, timeout=180) as resp:
+        with request.urlopen(req, timeout=30, context=_SSL_CTX) as resp:
             result = json.loads(resp.read().decode("utf-8"))
         log(f"API 响应: {result}")
         success = result.get("success", False)
@@ -1217,8 +1381,7 @@ def main():
         sys.exit(0)
 
     # 6. Publish
-    success = publish_to_wechat(article["title"], html_content, cover_url,
-                               article_text=article["content"])
+    success = publish_to_wechat(article["title"], html_content, cover_url)
 
     if success:
         log("✅ 发布成功！")
