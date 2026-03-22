@@ -873,7 +873,8 @@ def generate_image_doubao(prompt, size="1024x1024", label="图片"):
         "model": "doubao-seedream-4-5-251128",
         "prompt": prompt,
         "size": size,
-        "n": 1,
+        "response_format": "url",
+        "watermark": False,
     }
     req = request.Request(
         "https://ark.cn-beijing.volces.com/api/v3/images/generations",
