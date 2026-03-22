@@ -38,8 +38,8 @@ jobs:
           set -x
           cd scripts
 
-          if [ -z "$GOOGLE_API_KEY" ] && [ -z "$DOUBAO_API_KEY" ]; then
-            echo "错误：未设置 GOOGLE_API_KEY 或 DOUBAO_API_KEY"
+          if [ -z "$GOOGLE_API_KEY" ]; then
+            echo "错误：未设置 GOOGLE_API_KEY"
             exit 1
           fi
 
