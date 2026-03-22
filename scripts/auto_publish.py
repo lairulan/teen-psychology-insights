@@ -1291,6 +1291,14 @@ def publish_to_wechat(title, html_content, cover_url=None, article_text=""):
         if not success:
             log(f"发布失败: {result.get('error', result)}")
         return success
+    except error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        log(f"发布异常: {e} | 响应体: {body[:500]}")
+        return False
     except Exception as e:
         log(f"发布异常: {e}")
         return False
