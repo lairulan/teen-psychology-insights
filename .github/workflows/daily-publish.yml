@@ -2,8 +2,9 @@ name: 心光馨语每日发布
 
 on:
   # GitHub Actions 自带定时触发（UTC 03:00 = 北京时间 11:00）
-  schedule:
-    - cron: '0 3 * * *'
+  # schedule (disabled: managed by Cloudflare Worker github-scheduler):
+  # schedule:
+  #    - cron: '0 3 * * *'
 
   # Cloudflare Workers 触发（作为备份双保险）
   repository_dispatch:
