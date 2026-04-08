@@ -32,15 +32,15 @@ jobs:
       - name: 生成并发布心理学文章
         env:
           WECHAT_API_KEY: ${{ secrets.WECHAT_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          DOUBAO_API_KEY: ${{ secrets.DOUBAO_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
           IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
         run: |
           set -x
           cd scripts
 
-          if [ -z "$GOOGLE_API_KEY" ] && [ -z "$DOUBAO_API_KEY" ]; then
-            echo "错误：未设置 GOOGLE_API_KEY 或 DOUBAO_API_KEY"
+          if [ -z "$DEEPSEEK_API_KEY" ] && [ -z "$ARK_API_KEY" ]; then
+            echo "错误：未设置 DEEPSEEK_API_KEY 或 ARK_API_KEY"
             exit 1
           fi
 

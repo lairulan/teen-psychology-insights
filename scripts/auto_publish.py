@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-心光馨语自动发布脚本 v3.4
+心光馨语自动发布脚本 v4.0
 每天自动运行，生成闺蜜聊天式心理学短文并发布到公众号
 
 流程：
-1. 选题（4层漏斗：5平台热搜轮换 → Gemini实时搜索 → 日历时令 → 话题池）
-2. 用 Gemini 2.5 Flash 生成 800-1200 字闺蜜聊天式文章（豆包兜底）
-3. 用 Gemini Imagen 4 生成封面图 + 2张正文配图，上传 imgbb 获取 URL
+1. 选题（4层漏斗：5平台热搜轮换 → DeepSeek实时话题 → 日历时令 → 话题池）
+2. 用 DeepSeek V3 生成 800-1200 字闺蜜聊天式文章（豆包兜底）
+3. 用豆包 Seedream 生成封面图 + 2张正文配图，上传 imgbb 获取 URL
 4. 转换为微信公众号 HTML（暖橙色调 #FF9F43），配图替换占位符
 5. 发布到"心光馨语"公众号
 
@@ -20,6 +20,7 @@ v3.0  投产：修复发布bug，更新凭证，GitHub Actions 北京11:00定时
 v3.1  配图修复：封面图+正文2张配图，Imagen 4 + imgbb 上传
 v3.2  配图双引擎：Imagen 4 失败时自动切豆包 Seedream 兜底
 v3.4  选题防重复：修复热搜JSON解析失败（增加截断修复+纯文本兜底），日历选题池扩至每月15个，新增7天去重机制
+v4.0  引擎替换：DeepSeek V3 替代 Gemini，豆包 Seedream 为唯一配图引擎，移除 GOOGLE_API_KEY 依赖
 """
 
 import argparse
@@ -35,8 +36,8 @@ from urllib import request, error
 
 # 配置
 WECHAT_API_KEY = os.environ.get("WECHAT_API_KEY")
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-DOUBAO_API_KEY = os.environ.get("DOUBAO_API_KEY")
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+ARK_API_KEY = os.environ.get("ARK_API_KEY") or os.environ.get("DOUBAO_API_KEY")
 IMGBB_API_KEY = os.environ.get("IMGBB_API_KEY")
 # 天行数据 API Key（用于获取微博热搜）
 TIANAPI_KEY = os.environ.get("TIANAPI_KEY", "a0ba59d286ea1b308f5719a4ba28d075")
@@ -127,9 +128,37 @@ def log(message):
         pass
 
 
+def call_deepseek_api(prompt, max_tokens=4000):
+    """Call DeepSeek V3 API (primary LLM)"""
+    if not DEEPSEEK_API_KEY:
+        return None
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": 0.85,
+    }
+    req = request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        },
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=90) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        return result["choices"][0]["message"]["content"]
+    except Exception as e:
+        log(f"DeepSeek API 调用失败: {e}")
+        return None
+
+
 def call_doubao_api(prompt, max_tokens=4000):
     """Call Doubao ARK API as fallback for content generation (OpenAI-compatible)"""
-    if not DOUBAO_API_KEY:
+    if not ARK_API_KEY:
         return None
     url = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
     payload = {
@@ -143,7 +172,7 @@ def call_doubao_api(prompt, max_tokens=4000):
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {DOUBAO_API_KEY}",
+            "Authorization": f"Bearer {ARK_API_KEY}",
         },
         method="POST",
     )
@@ -157,36 +186,12 @@ def call_doubao_api(prompt, max_tokens=4000):
 
 
 def call_gemini_api(prompt, max_tokens=4000):
-    """Call Google Gemini API for content generation, fallback to Doubao on failure"""
-    if not GOOGLE_API_KEY:
-        log("未设置 GOOGLE_API_KEY，尝试豆包 API 兜底")
-        return call_doubao_api(prompt, max_tokens)
-
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.5-flash:generateContent?key={GOOGLE_API_KEY}"
-    )
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "maxOutputTokens": max_tokens,
-            "temperature": 0.85,
-        },
-    }
-    req = request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with request.urlopen(req, timeout=90) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-        return result["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception as e:
-        log(f"Gemini API 调用失败: {e}")
-        log("尝试豆包 API 兜底...")
-        return call_doubao_api(prompt, max_tokens)
+    """统一 LLM 调用：DeepSeek V3 主力，豆包兜底"""
+    result = call_deepseek_api(prompt, max_tokens)
+    if result:
+        return result
+    log("DeepSeek 失败，尝试豆包兜底...")
+    return call_doubao_api(prompt, max_tokens)
 
 
 # 5个平台热搜来源：(接口路径, title字段名, 显示名称)
@@ -247,33 +252,25 @@ def fetch_hot_topics():
 
 
 def fetch_gemini_search_topics():
-    """Use Gemini 2.5 Flash + Google Search grounding to get real-time hot topics"""
-    if not GOOGLE_API_KEY:
-        return []
+    """用 DeepSeek 根据当前时令生成实时感话题（替代 Gemini Search）"""
     today = datetime.now().strftime("%Y年%m月%d日")
-    prompt = f"""今天是{today}。请用Google搜索，找出今天中国社交媒体上热议的与以下主题相关的话题：
-青少年心理健康、亲子关系、学业压力、情绪管理、教育焦虑、青春期成长。
+    month = datetime.now().month
+    prompt = f"""今天是{today}。你是一位关注青少年心理健康的编辑。
+请根据当前时节（{month}月），列出10个在中国家长和学生群体中近期可能热议的话题，聚焦：
+青少年情绪、学业压力、亲子关系、成长烦恼、青春期心理。
 
-请列出10-15个具体的热议话题或社会现象，每行一个，不需要解释，直接列话题名称。
-排除娱乐八卦、政治、自然灾害类话题。"""
+要求：每行一个话题，话题具体有代入感，符合当前时令（如月考/开学/放假/节假日等），不超过15字。
+不要编号，不要解释，只输出话题列表。"""
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GOOGLE_API_KEY}"
-        payload = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "tools": [{"google_search": {}}],
-            "generationConfig": {"maxOutputTokens": 600}
-        }
-        data = json.dumps(payload).encode("utf-8")
-        req = request.Request(url, data=data, headers={"Content-Type": "application/json"})
-        with request.urlopen(req, timeout=20) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-        text = result["candidates"][0]["content"]["parts"][0]["text"]
-        topics = [line.strip().lstrip("0123456789.-、 ") for line in text.strip().splitlines() if line.strip() and len(line.strip()) > 3]
+        result = call_deepseek_api(prompt, max_tokens=500)
+        if not result:
+            return []
+        topics = [line.strip().lstrip("0123456789.-、·•* ") for line in result.strip().splitlines() if line.strip() and len(line.strip()) > 3]
         topics = [t for t in topics if t][:15]
-        log(f"Gemini搜索获取到 {len(topics)} 个实时热点话题")
+        log(f"DeepSeek时令话题生成 {len(topics)} 个")
         return topics
     except Exception as e:
-        log(f"Gemini搜索话题获取失败: {e}")
+        log(f"DeepSeek时令话题获取失败: {e}")
         return []
 
 
@@ -770,69 +767,19 @@ def generate_article(topic_info):
 
 
 def generate_cover_image(title):
-    """Generate cover image using Google Gemini Imagen API, upload to IMGBB"""
-    if not GOOGLE_API_KEY:
-        log("未设置 GOOGLE_API_KEY，跳过封面图生成")
+    """Generate cover image using Doubao Seedream, upload to IMGBB"""
+    if not ARK_API_KEY or not IMGBB_API_KEY:
+        log("跳过封面图生成（需要 ARK_API_KEY 和 IMGBB_API_KEY）")
         return None
 
     log("正在生成封面图...")
-
-    imagen_url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"imagen-4.0-generate-001:predict?key={GOOGLE_API_KEY}"
-    )
-
     prompt = (
-        f'Illustration for an article titled "{title}". '
-        "Warm healing watercolor illustration, soft warm orange and light gold tones, "
-        "cozy atmosphere, gentle light, heartwarming mood, "
+        f'Warm healing watercolor illustration for an article titled "{title}". '
+        "Soft warm orange and light gold tones, cozy atmosphere, gentle light, heartwarming mood, "
         "elements related to teenagers, family, growth, and psychology. "
-        "Emotionally warm and empathetic. High quality, 4K."
+        "Emotionally warm and empathetic. High quality."
     )
-
-    payload = {
-        "instances": [{"prompt": prompt}],
-        "parameters": {
-            "sampleCount": 1,
-            "aspectRatio": "16:9",
-            "personGeneration": "allow_all",
-        },
-    }
-
-    req = request.Request(
-        imagen_url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
-    try:
-        with request.urlopen(req, timeout=120) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-
-        predictions = result.get("predictions", [])
-        if not predictions:
-            log("Imagen API 未返回结果")
-            return None
-
-        image_bytes = base64.b64decode(predictions[0]["bytesBase64Encoded"])
-        log(f"封面图生成成功 ({len(image_bytes)} bytes)")
-
-        # Upload to IMGBB if key available
-        if IMGBB_API_KEY:
-            return upload_to_imgbb(image_bytes, label="封面图")
-
-        return None
-
-    except error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        log(f"Imagen API 错误 {e.code}: {body[:200]}")
-        log("尝试豆包 Seedream 兜底...")
-        return generate_image_doubao(prompt, size="2560x1440", label="封面图")
-    except Exception as e:
-        log(f"封面图生成异常: {e}")
-        log("尝试豆包 Seedream 兜底...")
-        return generate_image_doubao(prompt, size="2560x1440", label="封面图")
+    return generate_image_doubao(prompt, size="2560x1440", label="封面图")
 
 
 def upload_to_imgbb(image_bytes, label="图片"):
@@ -860,7 +807,7 @@ def upload_to_imgbb(image_bytes, label="图片"):
 
 def generate_image_doubao(prompt, size="1920x1920", label="图片"):
     """Generate image via Doubao Seedream, download temp URL and upload to imgbb"""
-    if not DOUBAO_API_KEY or not IMGBB_API_KEY:
+    if not ARK_API_KEY or not IMGBB_API_KEY:
         return None
     payload = {
         "model": "doubao-seedream-4-5-251128",
@@ -872,7 +819,7 @@ def generate_image_doubao(prompt, size="1920x1920", label="图片"):
     req = request.Request(
         "https://ark.cn-beijing.volces.com/api/v3/images/generations",
         data=json.dumps(payload).encode(),
-        headers={"Authorization": f"Bearer {DOUBAO_API_KEY}", "Content-Type": "application/json"},
+        headers={"Authorization": f"Bearer {ARK_API_KEY}", "Content-Type": "application/json"},
         method="POST",
     )
     try:
@@ -892,22 +839,12 @@ def generate_image_doubao(prompt, size="1920x1920", label="图片"):
 
 
 def generate_body_images(topic_info, title):
-    """Generate 2 body images based on topic, upload to imgbb, return list of URLs"""
-    if not IMGBB_API_KEY:
-        log("跳过正文配图（需要 IMGBB_API_KEY）")
-        return []
-    if not GOOGLE_API_KEY and not DOUBAO_API_KEY:
-        log("跳过正文配图（需要 GOOGLE_API_KEY 或 DOUBAO_API_KEY）")
+    """Generate 2 body images using Doubao Seedream, upload to imgbb"""
+    if not ARK_API_KEY or not IMGBB_API_KEY:
+        log("跳过正文配图（需要 ARK_API_KEY 和 IMGBB_API_KEY）")
         return []
 
     log("正在生成正文配图...")
-
-    imagen_url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"imagen-4.0-fast-generate-001:predict?key={GOOGLE_API_KEY}"
-    )
-
-    # 2张配图：知识场景图 + 实用场景图
     prompts = [
         (
             f"Warm watercolor illustration showing a teenager and parent having a gentle conversation "
@@ -923,35 +860,9 @@ def generate_body_images(topic_info, title):
 
     urls = []
     for i, prompt in enumerate(prompts):
-        payload = {
-            "instances": [{"prompt": prompt}],
-            "parameters": {"sampleCount": 1, "aspectRatio": "4:3"},
-        }
-        req = request.Request(
-            imagen_url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with request.urlopen(req, timeout=90) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-            predictions = result.get("predictions", [])
-            if predictions:
-                image_bytes = base64.b64decode(predictions[0]["bytesBase64Encoded"])
-                url = upload_to_imgbb(image_bytes, label=f"正文配图{i+1}")
-                if url:
-                    urls.append(url)
-        except error.HTTPError as e:
-            log(f"正文配图{i+1} Imagen失败，切换豆包: {e.read().decode()[:100]}")
-            url = generate_image_doubao(prompt, size="1920x1920", label=f"正文配图{i+1}")
-            if url:
-                urls.append(url)
-        except Exception as e:
-            log(f"正文配图{i+1} Imagen异常，切换豆包: {e}")
-            url = generate_image_doubao(prompt, size="1920x1920", label=f"正文配图{i+1}")
-            if url:
-                urls.append(url)
+        url = generate_image_doubao(prompt, size="1920x1920", label=f"正文配图{i+1}")
+        if url:
+            urls.append(url)
 
     log(f"正文配图完成: {len(urls)}/2 张")
     return urls
@@ -1328,8 +1239,8 @@ def main():
         sys.exit(0)
 
     # Validate required env vars
-    if not GOOGLE_API_KEY:
-        log("❌ 未设置 GOOGLE_API_KEY")
+    if not DEEPSEEK_API_KEY and not ARK_API_KEY:
+        log("❌ 未设置 DEEPSEEK_API_KEY 或 ARK_API_KEY，至少需要一个文本生成 API")
         sys.exit(1)
     if not WECHAT_API_KEY and not args.dry_run:
         log("❌ 未设置 WECHAT_API_KEY")
