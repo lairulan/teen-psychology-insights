@@ -1,12 +1,12 @@
 ---
 name: teen-psychology-insights
-version: 4.0.0
+version: 4.1.0
 description: 心光馨语 - 轻松有趣的心理学公众号内容生成。闺蜜聊天式风格，800-1200字短文，温暖治愈系配图，自动发布到微信公众号。触发词："青少年心理洞察"、"青少年心理"、"写心理文章"、"心光馨语"、"teen psychology insights"。
 author: rulanlai
 tags: [psychology, teen, parenting, education, wechat]
 ---
 
-# 心光馨语 - 轻松心理学内容生成 v4.0
+# 心光馨语 - 轻松心理学内容生成 v4.1
 
 像闺蜜聊天一样讲心理学，**轻松、温暖、有共鸣**。每日一篇 800-1200 字短文，配温暖治愈系插画，发布到"心光馨语"微信公众号。
 
@@ -345,7 +345,8 @@ python3 ~/.claude/skills/teen-psychology-insights/scripts/publish.py publish \
 
 | 版本 | 日期 | 更新内容 |
 |------|------|----------|
-| **4.0** | **2026-04-08** | **引擎全面替换（Breaking Change）**：① DeepSeek V3（deepseek-chat）替代 Gemini 2.5 Flash 成为文章生成主力，豆包 doubao-seed-2-0-lite 为文字兜底；② 移除所有 Google Imagen 依赖，豆包 Seedream 成为唯一配图引擎；③ 环境变量重构：废弃 GOOGLE_API_KEY/DOUBAO_API_KEY，改用 DEEPSEEK_API_KEY + ARK_API_KEY；④ fetch_gemini_search_topics 重写为按月份生成时令话题；⑤ GitHub Actions workflow 同步更新；⑥ 修复因 Gemini API 401 导致的停更 8 天问题 |
+| **4.1** | **2026-04-09** | **垂直热点源升级**：新增 fetch_bing_news_topics()，Bing News RSS × 5个精准词，每日25条100%相关心理/亲子资讯，无API key无频率限制，替换泛娱乐热搜为第1层；天行热搜降为兜底 |
+| **4.0** | **2026-04-08** | **引擎全面替换**：DeepSeek V3 替代 Gemini，豆包 Seedream 为唯一配图引擎，DEEPSEEK_API_KEY + ARK_API_KEY，修复停更 8 天 |
 | 3.4 | 2026-03-14 | 选题防重复：修复热搜JSON解析失败（截断修复+纯文本兜底），日历选题池扩至每月15个，新增7天去重机制 |
 | 3.3 | 2026-03-12 | 排版升级：背景改为奶白#FFFBF5，混合字体（标题宋体+正文黑体），行距2.0，字色#3D3020；语气词克制（全篇≤2处）；配图改为开头1张+中间1-2张 |
 | 2.0 | 2026-03-10 | 全面升级：公众号改为"心光馨语"，内容从深度长文改为闺蜜聊天式800-1200字短文，排版用grace主题+暖橙浅金色调，配图接入Google Gemini API |
