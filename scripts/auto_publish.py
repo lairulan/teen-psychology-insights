@@ -193,8 +193,55 @@ def call_gemini_api(prompt, max_tokens=4000):
     log("DeepSeek 失败，尝试豆包兜底...")
     return call_doubao_api(prompt, max_tokens)
 
+# Bing News RSS 垂直搜索词（精准命中青少年心理/亲子话题）
+BING_NEWS_QUERIES = [
+    "青少年 心理健康",
+    "孩子 情绪 焦虑",
+    "亲子关系 沟通",
+    "学生 压力 厌学",
+    "青春期 叛逆 家长",
+]
 
-# 5个平台热搜来源：(接口路径, title字段名, 显示名称)
+
+def fetch_bing_news_topics():
+    """用 Bing News RSS 垂直搜索当日青少年心理/亲子热点，每词抓5条，共25条"""
+    import ssl
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    all_titles, seen = [], set()
+    for q in BING_NEWS_QUERIES:
+        url = (
+            "https://cn.bing.com/news/search?"
+            + urllib.parse.urlencode({"q": q, "format": "rss", "cc": "zh-cn", "setlang": "zh-cn"})
+        )
+        try:
+            req = request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+            })
+            with request.urlopen(req, timeout=10, context=ctx) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+            # 提取 <item> 内的标题
+            items = re.findall(
+                r"<item>.*?<title[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>.*?</item>",
+                raw, re.DOTALL
+            )
+            for t in items[:5]:
+                t = t.strip()
+                # 过滤：去广告/机构推广词、太短的、重复的
+                if len(t) > 6 and t not in seen and "广告" not in t and "招生" not in t:
+                    seen.add(t)
+                    all_titles.append(t)
+        except Exception as e:
+            log(f"Bing新闻搜索失败 [{q}]: {e}")
+
+    log(f"Bing News 垂直搜索获取到 {len(all_titles)} 条心理/亲子资讯")
+    return all_titles
+
+
+# 天行热搜（作为兜底补充，已知百度/全网频率受限）
 TIANAPI_SOURCES = [
     ("weibohot",   "hotword", "微博热搜"),
     ("douyinhot",  "word",    "抖音热搜"),
@@ -648,29 +695,29 @@ def select_topic_from_hot(hot_topics, source="热搜", recent_titles=None):
 
 def select_topic():
     """Select today's topic: 4-tier funnel with deduplication
-    1. 多平台热搜（每天轮换2个平台，5个平台循环覆盖）
-    2. Gemini + Google Search 实时热点
+    1. Bing News RSS 垂直搜索（5个精准关键词，25条高相关度资讯）
+    2. 天行多平台热搜（每天轮换，作为补充兜底）
     3. 学期日历时令话题
     4. 话题池轮询兜底
     """
     # 读取近期文章标题用于去重
     recent_titles = get_recent_titles(days=7)
 
-    # 第1层：多平台热搜（轮换）
+    # 第1层：Bing News 垂直搜索（精准命中心理/亲子话题）
+    bing_topics = fetch_bing_news_topics()
+    if bing_topics:
+        topic = select_topic_from_hot(bing_topics, source="Bing新闻垂直搜索", recent_titles=recent_titles)
+        if topic:
+            return topic
+        log("Bing新闻选题失败，尝试天行热搜")
+
+    # 第2层：天行多平台热搜（轮换，已知部分接口频率受限）
     hot_topics, source_name = fetch_hot_topics()
     if hot_topics:
         topic = select_topic_from_hot(hot_topics, source=source_name, recent_titles=recent_titles)
         if topic:
             return topic
-        log("热搜选题失败，尝试 Gemini 搜索")
-
-    # 第2层：Gemini + Google Search 实时热点
-    gemini_topics = fetch_gemini_search_topics()
-    if gemini_topics:
-        topic = select_topic_from_hot(gemini_topics, source="Google实时搜索", recent_titles=recent_titles)
-        if topic:
-            return topic
-        log("Gemini搜索选题失败，尝试日历选题")
+        log("热搜选题失败，尝试日历选题")
 
     # 第3层：学期日历时令话题（带去重）
     calendar_topic = fetch_calendar_topic(recent_titles=recent_titles)
