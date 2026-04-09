@@ -36,7 +36,7 @@ jobs:
           ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
           IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
         run: |
-          set -x
+          set -euo pipefail
           cd scripts
 
           if [ -z "$DEEPSEEK_API_KEY" ] && [ -z "$ARK_API_KEY" ]; then
