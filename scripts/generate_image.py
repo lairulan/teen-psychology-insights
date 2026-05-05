@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-心光馨语 - 配图生成脚本
+心光心理学 - 配图生成脚本
 直接调用 AI Gateway（https://ai-gateway.happycapy.ai）+ IMGBB 上传
 无本地路径依赖，可在 GitHub Actions 中正常运行
 """
@@ -20,7 +20,7 @@ from urllib.parse import urlencode
 API_BASE = "https://ai-gateway.happycapy.ai/api/v1"
 DEFAULT_MODEL = "google/gemini-3.1-flash-image-preview"
 
-OUTPUT_BASE = os.path.expanduser("~/Documents/Obsidian/心光馨语/images")
+OUTPUT_BASE = os.path.expanduser("~/Documents/Obsidian/心光心理学/images")
 
 STYLE_PROMPTS = {
     "warm": (
@@ -247,7 +247,7 @@ def generate_article_images(markdown_file, max_images=2, size="1024x1024"):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="心光馨语 配图生成（AI Gateway 直连）")
+    parser = argparse.ArgumentParser(description="心光心理学 配图生成（AI Gateway 直连）")
     subparsers = parser.add_subparsers(dest="command")
 
     cover_p = subparsers.add_parser("cover")

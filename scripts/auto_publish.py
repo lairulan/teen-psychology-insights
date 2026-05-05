@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-心光馨语自动发布脚本 v4.0
-每天自动运行，生成闺蜜聊天式心理学短文并发布到公众号
+心光心理学自动发布脚本 v5.0
+周一三五生成育儿/亲子沟通文章，周二四六生成女性自我成长文章并发布到公众号
 
 流程：
-1. 选题（4层漏斗：5平台热搜轮换 → DeepSeek实时话题 → 日历时令 → 话题池）
-2. 用 DeepSeek V3 生成 800-1200 字闺蜜聊天式文章（豆包兜底）
-3. 用豆包 Seedream 生成封面图 + 2张正文配图，上传 imgbb 获取 URL
-4. 转换为微信公众号 HTML（暖橙色调 #FF9F43），配图替换占位符
-5. 发布到"心光馨语"公众号
+1. 按星期选择栏目（周一三五育儿，周二四六女性成长，周日跳过）
+2. 读取微博热搜并提炼符合栏目定位的心理学角度
+3. 用 DeepSeek V3 生成温暖、亲切、专业的公众号文章（豆包兜底）
+4. 用豆包 Seedream 生成封面图 + 2张正文配图，上传 imgbb 获取 URL
+5. 转换为微信公众号 HTML（暖橙色调 #FF9F43），配图替换占位符
+6. 发布到"心光心理学"公众号
 
 版本历史：
 v1.0  初始版本
@@ -21,6 +22,7 @@ v3.1  配图修复：封面图+正文2张配图，Imagen 4 + imgbb 上传
 v3.2  配图双引擎：Imagen 4 失败时自动切豆包 Seedream 兜底
 v3.4  选题防重复：修复热搜JSON解析失败（增加截断修复+纯文本兜底），日历选题池扩至每月15个，新增7天去重机制
 v4.0  引擎替换：DeepSeek V3 替代 Gemini，豆包 Seedream 为唯一配图引擎，移除 GOOGLE_API_KEY 依赖
+v5.0  定位调整：周一三五育儿/亲子沟通，周二四六女性自我成长，按栏目人设生成内容
 """
 
 import argparse
@@ -43,11 +45,121 @@ IMGBB_API_KEY = os.environ.get("IMGBB_API_KEY")
 TIANAPI_KEY = os.environ.get("TIANAPI_KEY", "a0ba59d286ea1b308f5719a4ba28d075")
 APPID = "wx52189e9b012018e1"
 API_BASE = "https://wx.limyai.com/api/openapi"
+ACCOUNT_NAME = "心光心理学"
+ACCOUNT_TAGLINE = "把心理学说给生活听"
 
 # 工作目录
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR = os.path.dirname(SCRIPT_DIR)
 LOG_FILE = os.path.join(WORK_DIR, "logs", "daily-publish.log")
+
+PUBLISH_PROFILES = {
+    "parenting": {
+        "key": "parenting",
+        "column_name": "育儿与亲子沟通",
+        "schedule": "周一、周三、周五",
+        "persona": "一位温柔、亲切、很懂家长处境的亲子沟通培训师",
+        "tone": "温馨、亲切、具体、有陪伴感；像在陪家长慢慢把话说清楚，不指责、不吓唬、不制造焦虑",
+        "target_audience": "正在养育孩子、关心亲子关系和家庭沟通的父母",
+        "topic_goal": "从微博热搜中提炼育儿、亲子沟通、孩子情绪、学习压力、家庭关系相关角度",
+        "topic_rules": [
+            "必须落在育儿、亲子沟通、孩子情绪、家庭教育或家长自我调整上",
+            "如果热搜本身不是育儿话题，要提炼它背后的家庭沟通或孩子成长角度",
+            "避免娱乐八卦、极端个案、未经证实的传闻和制造家长焦虑的角度",
+        ],
+        "categories": ["育儿沟通", "亲子关系", "孩子情绪", "学习陪伴", "家庭教育", "家长成长"],
+        "fallback_topics": [
+            {"topic": "孩子顶嘴时，父母怎么把话接住", "category": "亲子关系"},
+            {"topic": "孩子写作业拖拉，背后可能不是懒", "category": "学习陪伴"},
+            {"topic": "孩子发脾气时，先稳住关系再讲道理", "category": "孩子情绪"},
+            {"topic": "父母越着急，孩子越不愿意说真话怎么办", "category": "育儿沟通"},
+            {"topic": "孩子说不想上学，父母第一句话很重要", "category": "学习陪伴"},
+            {"topic": "家庭里的好好说话，是孩子安全感的底色", "category": "家庭教育"},
+            {"topic": "孩子沉迷手机时，先看见他的需要", "category": "亲子关系"},
+            {"topic": "父母的温柔边界，才是孩子真正的规则感", "category": "家长成长"},
+        ],
+        "article_structure": [
+            "开头从微博热搜或一个家庭生活小场景切入，让家长觉得被理解",
+            "中段用大白话解释一个亲子沟通或儿童发展心理学视角",
+            "给出3个可直接照着说、照着做的沟通练习或话术",
+            "结尾温暖收束，强调关系比输赢更重要",
+        ],
+        "must_include": [
+            "至少给出2句可以直接对孩子说的话",
+            "提醒父母先理解感受，再处理行为",
+            "避免把孩子标签化为懒、叛逆、不懂事",
+        ],
+        "forbidden_phrases": ["废掉一个孩子", "毁掉孩子", "再不管就晚了", "家长必须", "孩子没救了"],
+        "style_label": "温柔亲切的亲子沟通",
+        "default_summary": "亲子沟通的一点温柔提醒",
+        "cover_prompt": (
+            "Warm healing watercolor illustration, Chinese parent and child in a gentle conversation, "
+            "cozy home light, soft orange and light gold tones, caring parenting communication, "
+            "emotionally warm, no text, high quality."
+        ),
+        "body_prompts": [
+            "Warm watercolor illustration of a parent listening patiently to a child at home, soft warm orange light, caring communication, no text.",
+            "Warm watercolor illustration of a family having a calm conversation, gentle boundaries, cozy home, soft gold tones, no text.",
+        ],
+    },
+    "women_growth": {
+        "key": "women_growth",
+        "column_name": "女性自我成长",
+        "schedule": "周二、周四、周六",
+        "persona": "一位温暖、专业、心理动力学方向的心理咨询师",
+        "tone": "温暖、稳稳的、专业但不学术；像咨询室里慢慢陪读者看见自己的感受、关系模式和内在需要",
+        "target_audience": "关注自我成长、关系边界、情绪照顾和内在稳定感的女性读者",
+        "topic_goal": "围绕女性自我成长，结合微博热搜中可延展的情绪、关系、职场、亲密关系、家庭角色议题",
+        "topic_rules": [
+            "必须落在女性自我成长、内在关系、情绪照顾、边界感、自我价值或亲密关系上",
+            "可以借微博热搜作为引子，但不要写成娱乐八卦或情绪宣泄",
+            "保持心理动力学视角：看见关系模式、早年经验影响、重复的内在冲突和真实需要",
+        ],
+        "categories": ["自我成长", "情绪照顾", "关系边界", "自我价值", "亲密关系", "职场女性"],
+        "fallback_topics": [
+            {"topic": "为什么你总是在关系里先照顾别人", "category": "关系边界"},
+            {"topic": "一个女人真正的稳定感，从允许自己有感受开始", "category": "情绪照顾"},
+            {"topic": "停止过度解释，是自我边界开始长出来的信号", "category": "关系边界"},
+            {"topic": "总怕让别人失望，可能是在重复旧关系里的自己", "category": "自我成长"},
+            {"topic": "亲密关系里最消耗人的，不是争吵，而是长期被忽略", "category": "亲密关系"},
+            {"topic": "女性的自我价值，不该只靠有用和懂事来证明", "category": "自我价值"},
+            {"topic": "职场里的委屈感，常常也在提醒你看见边界", "category": "职场女性"},
+            {"topic": "学会拒绝，不是变冷漠，而是开始尊重自己", "category": "关系边界"},
+        ],
+        "article_structure": [
+            "开头用微博热搜或一个女性日常困境切入，不猎奇、不评判",
+            "中段用心理动力学视角解释：情绪背后的需要、关系模式、内在冲突",
+            "给出3个温和的自我觉察练习或关系边界练习",
+            "结尾把读者带回自我照顾和现实行动",
+        ],
+        "must_include": [
+            "至少出现2个自我觉察问题",
+            "用通俗语言解释一个心理动力学视角",
+            "避免诊断化，不承诺疗效；遇到持续痛苦时建议寻求专业支持",
+        ],
+        "forbidden_phrases": ["女人一定要", "彻底逆袭", "拿捏男人", "原生家庭毁了你", "治愈所有创伤"],
+        "style_label": "温暖专业的心理动力学自我成长",
+        "default_summary": "陪你看见内在需要与关系边界",
+        "cover_prompt": (
+            "Warm elegant watercolor illustration of an adult woman sitting by a window with a journal, "
+            "soft morning light, calm self-reflection, warm orange and gentle teal accents, psychological growth, "
+            "no text, high quality."
+        ),
+        "body_prompts": [
+            "Warm watercolor illustration of an adult woman journaling and reflecting calmly, cozy room, soft light, psychological self-growth, no text.",
+            "Warm watercolor illustration of a woman setting a gentle boundary in conversation, respectful relationship, soft orange and teal accents, no text.",
+        ],
+    },
+}
+
+WEEKDAY_PROFILE = {
+    0: "parenting",      # Monday
+    1: "women_growth",  # Tuesday
+    2: "parenting",      # Wednesday
+    3: "women_growth",  # Thursday
+    4: "parenting",      # Friday
+    5: "women_growth",  # Saturday
+}
 
 # 话题库（按天数轮询，覆盖全年不重复）
 TOPIC_POOL = [
@@ -126,6 +238,48 @@ def log(message):
             f.write(log_msg + "\n")
     except Exception:
         pass
+
+
+def get_publish_profile(now=None):
+    """Return today's content profile, or None on non-publishing days."""
+    now = now or datetime.now()
+    profile_key = WEEKDAY_PROFILE.get(now.weekday())
+    if not profile_key:
+        return None
+    return PUBLISH_PROFILES[profile_key]
+
+
+def fetch_weibo_hot_topics(num=50):
+    """Fetch Weibo hot search topics as the primary editorial source."""
+    return _fetch_tianapi("weibohot", "hotword", "微博热搜", num=num)
+
+
+def choose_fallback_profile_topic(profile, recent_titles=None):
+    """Pick a profile-specific fallback topic when Weibo hot topics are unavailable."""
+    candidates = profile["fallback_topics"]
+    if not candidates:
+        return None
+
+    today = datetime.now()
+    base_index = (today - datetime(2026, 1, 1)).days % len(candidates)
+    for offset in range(len(candidates)):
+        idx = (base_index + offset) % len(candidates)
+        topic = candidates[idx]
+        if not _is_similar_topic(topic["topic"], recent_titles):
+            log(f"{profile['column_name']}兜底选题: {topic['topic']} (分类: {topic['category']})")
+            return {**topic, "source": "栏目话题池", "profile": profile}
+
+    topic = candidates[base_index]
+    log(f"{profile['column_name']}兜底选题（近期相似，强制使用）: {topic['topic']}")
+    return {**topic, "source": "栏目话题池", "profile": profile}
+
+
+def get_profile_by_key(profile_key):
+    profile = PUBLISH_PROFILES.get(profile_key)
+    if not profile:
+        valid = ", ".join(PUBLISH_PROFILES.keys())
+        raise ValueError(f"未知栏目: {profile_key}，可选: {valid}")
+    return profile
 
 
 def call_deepseek_api(prompt, max_tokens=4000):
@@ -640,8 +794,8 @@ def _repair_json(text):
     return None
 
 
-def select_topic_from_hot(hot_topics, source="热搜", recent_titles=None):
-    """Use Gemini to pick the best psychology angle from trending topics"""
+def select_topic_from_hot(hot_topics, source="热搜", recent_titles=None, profile=None):
+    """Use LLM to pick the best profile-matched psychology angle from trending topics."""
     topics_text = "\n".join(f"{i+1}. {t}" for i, t in enumerate(hot_topics[:30]))
 
     # 构建去重提示
@@ -649,24 +803,46 @@ def select_topic_from_hot(hot_topics, source="热搜", recent_titles=None):
     if recent_titles:
         dedup_hint = f"\n\n重要：最近已发布过以下文章，请避免选择相同或相似的话题：\n" + "\n".join(f"- {t}" for t in recent_titles)
 
-    prompt = f"""你是"心光馨语"公众号的编辑，专注青少年心理健康和亲子关系。
+    if profile:
+        category_list = "/".join(profile["categories"])
+        rules = "\n".join(f"- {rule}" for rule in profile["topic_rules"])
+        prompt = f"""你是"{ACCOUNT_NAME}"公众号的选题编辑。
+
+今日栏目：{profile['column_name']}
+账号定位：{profile['topic_goal']}
+作者人设：{profile['persona']}
 
 以下是今日{source}热点话题（前30条）：
 {topics_text}
 {dedup_hint}
 
-请从中选一个最适合结合青少年心理学或亲子关系来写文章的话题，或者受热点启发提炼一个相关话题。
+请从中选择一个最适合今日栏目的话题，或受热搜启发提炼一个更适合公众号的心理学角度。
 
 要求：
-- 优先选与青少年情绪、学习、亲子关系、成长直接相关的话题
-- 如没有直接相关的，可从社会热点（考试、就业、家庭、情感）中提炼一个心理学角度
-- 话题要能引发家长或青少年的共鸣
-- 避免选娱乐八卦、政治、灾难类话题
+{rules}
+- 话题要具体、有生活感，不要太大太虚
+- 如果热搜词可用，请在 hot_ref 中保留原始热搜词
 
 严格按以下格式回复，只输出一行 JSON，不要有其他任何文字：
 {{"topic": "话题", "category": "分类", "hot_ref": "热点词"}}
 
-分类只能是：学业压力/人际关系/情绪管理/亲子沟通/自我认知/趣味心理/成长与变化"""
+分类只能是：{category_list}"""
+    else:
+        prompt = f"""你是"心光心理学"公众号的编辑，专注心理健康和亲密关系。
+
+以下是今日{source}热点话题（前30条）：
+{topics_text}
+{dedup_hint}
+
+请从中选一个最适合结合心理学来写文章的话题，或者受热点启发提炼一个相关话题。
+
+要求：
+- 优先选与情绪、关系、成长、家庭、教育直接相关的话题
+- 如没有直接相关的，可从社会热点中提炼一个心理学角度
+- 避免选娱乐八卦、政治、灾难类话题
+
+严格按以下格式回复，只输出一行 JSON，不要有其他任何文字：
+{{"topic": "话题", "category": "分类", "hot_ref": "热点词"}}"""
 
     result = call_gemini_api(prompt, max_tokens=1000)
     if not result:
@@ -676,32 +852,71 @@ def select_topic_from_hot(hot_topics, source="热搜", recent_titles=None):
     data = _repair_json(result)
     if data and data.get("topic"):
         log(f"热搜选题: {data['topic']} (参考热搜: {data.get('hot_ref', '')})")
-        return {"topic": data["topic"], "category": data.get("category", "热点"), "hot_ref": data.get("hot_ref", "")}
+        return {
+            "topic": data["topic"],
+            "category": data.get("category", "热点"),
+            "hot_ref": data.get("hot_ref", ""),
+            "source": source,
+            "profile": profile,
+        }
 
     # JSON 解析全部失败，用纯文本方式兜底：直接让 Gemini 只返回话题名
     log(f"热搜JSON解析失败，尝试纯文本选题。原始返回: {result[:150]}")
-    fallback_prompt = f"""从以下热搜话题中，选一个最适合写青少年心理学文章的话题，只输出话题名称，不要输出其他任何内容：
+    if profile:
+        fallback_prompt = f"""从以下热搜话题中，选一个最适合"{profile['column_name']}"栏目写成心理学文章的话题。
+作者人设：{profile['persona']}
+选题目标：{profile['topic_goal']}
+只输出话题名称，不要输出其他任何内容：
+{topics_text}"""
+    else:
+        fallback_prompt = f"""从以下热搜话题中，选一个最适合写心理学文章的话题，只输出话题名称，不要输出其他任何内容：
 {topics_text}"""
     fallback_result = call_gemini_api(fallback_prompt, max_tokens=200)
     if fallback_result:
         topic_name = fallback_result.strip().strip('"\'').split('\n')[0].strip()
         if len(topic_name) > 3:
             log(f"纯文本兜底选题: {topic_name}")
-            return {"topic": topic_name, "category": "热点", "hot_ref": ""}
+            return {
+                "topic": topic_name,
+                "category": profile["categories"][0] if profile else "热点",
+                "hot_ref": "",
+                "source": source,
+                "profile": profile,
+            }
 
     log("热搜选题彻底失败")
     return None
 
 
-def select_topic():
-    """Select today's topic: 4-tier funnel with deduplication
-    1. Bing News RSS 垂直搜索（5个精准关键词，25条高相关度资讯）
-    2. 天行多平台热搜（每天轮换，作为补充兜底）
-    3. 学期日历时令话题
-    4. 话题池轮询兜底
-    """
+def select_topic(profile=None):
+    """Select today's topic with profile-aware Weibo hot-search priority."""
     # 读取近期文章标题用于去重
     recent_titles = get_recent_titles(days=7)
+
+    if profile:
+        weibo_topics = fetch_weibo_hot_topics()
+        if weibo_topics:
+            topic = select_topic_from_hot(
+                weibo_topics,
+                source="微博热搜",
+                recent_titles=recent_titles,
+                profile=profile,
+            )
+            if topic:
+                return topic
+            log("微博热搜选题失败，尝试栏目话题池")
+        else:
+            log("微博热搜为空，尝试栏目话题池")
+
+        fallback_topic = choose_fallback_profile_topic(profile, recent_titles=recent_titles)
+        if fallback_topic:
+            return fallback_topic
+
+    # Legacy fallback for manual/old invocations without a profile.
+    # 1. Bing News RSS 垂直搜索（5个精准关键词，25条高相关度资讯）
+    # 2. 天行多平台热搜（每天轮换，作为补充兜底）
+    # 3. 学期日历时令话题
+    # 4. 话题池轮询兜底
 
     # 第1层：Bing News 垂直搜索（精准命中心理/亲子话题）
     bing_topics = fetch_bing_news_topics()
@@ -741,51 +956,49 @@ def select_topic():
 
 
 def generate_article(topic_info):
-    """Generate article using Gemini API"""
+    """Generate article using profile-specific editorial positioning."""
     log("正在生成文章...")
+    profile = topic_info.get("profile") or PUBLISH_PROFILES["parenting"]
+    structure = "\n".join(f"- {item}" for item in profile["article_structure"])
+    must_include = "\n".join(f"- {item}" for item in profile["must_include"])
+    forbidden = "、".join(profile["forbidden_phrases"])
 
-    prompt = f"""你是"心光馨语"公众号的作者，写作风格是闺蜜聊天式——像朋友分享经验一样讲心理学知识。
+    prompt = f"""你是"{ACCOUNT_NAME}"公众号的作者。
+
+今日栏目：{profile['column_name']}（{profile['schedule']}）
+作者人设：{profile['persona']}
+目标读者：{profile['target_audience']}
+整体语气：{profile['tone']}
 
 请根据以下话题写一篇公众号文章：
 
 话题：{topic_info['topic']}
 分类：{topic_info['category']}
-{f"热搜背景：今日微博热搜「{topic_info['hot_ref']}」与此话题相关，可在文章中自然呼应这一热点" if topic_info.get('hot_ref') else ""}
+{f"热搜背景：今日微博热搜「{topic_info['hot_ref']}」与此话题相关。文章可以自然借这个热搜作为引子，但不要写成八卦评论。" if topic_info.get('hot_ref') else ""}
 
 严格要求：
-1. 字数：800-1200字，绝不超过1500字
-2. 语气：像闺蜜聊天，口语化，可以用"哈哈"、"真的"、"你说是不是"
-3. 零术语：所有心理学概念都用大白话解释
+1. 字数：900-1300字，绝不超过1500字
+2. 语气必须符合人设：温暖、亲切、专业、具体，不居高临下
+3. 心理学观点要用大白话讲清楚，允许少量专业概念，但必须解释成生活语言
 4. 段落短：每段不超过3-4行，手机阅读友好
-5. 温暖不鸡汤，真诚不矫情
-6. 多用问句增加互动感："你有没有发现……"、"是不是很像……"
+5. 温暖不鸡汤，专业不吓人，避免制造焦虑
+6. 禁止使用这些表达：{forbidden}
 
 文章结构：
-## 开头（150-200字）
-用"你有没有过这种时候……"或类似的日常场景开头，引发共鸣
+{structure}
 
-## 中间（300-400字）
-用聊天口吻讲1-2个心理学知识点，多用比喻"这就好像……"
-可以穿插有趣的心理学实验或数据
-
-## 实用Tips（200-300字）
-给出2-3个"马上能用"的小方法
-每个方法一句话概括 + 一个具体场景
-
-## 结尾（100-150字）
-不说教不总结，用一句温暖的话结束
+必须包含：
+{must_include}
 
 格式要求：
 - 输出纯 Markdown 格式
 - 第一行是标题（用 # ）
 - 正文不要在开头重复标题
 - 不要附参考资料
-- 不要用"根据研究表明"之类的学术表达
-- 用"心理学家做过一个特别有意思的实验"代替"研究显示"
-- 用"下次试试先闭嘴听完，真的有用"代替"建议采取积极倾听策略"
+- 不要用"根据研究表明"之类的生硬表达
 - 在"中间"部分末尾插入一行：<!-- IMG_PLACEHOLDER_1 -->
 - 在"实用Tips"部分末尾插入一行：<!-- IMG_PLACEHOLDER_2 -->
-- 实用Tips部分的每个方法必须用这个格式：**编号. 方法名：** 具体说明（例如：**1. 给他一个放空时间：** 孩子放学回家……）
+- 实用Tips或练习部分的每个方法必须用这个格式：**编号. 方法名：** 具体说明（例如：**1. 先接住感受：** 当对方说……）
 - 每个方法下面如果有具体场景，用缩进列表：  * **具体场景：** xxxxxx
 - 可以在文章中任意位置用 > 引用一句温暖的话作为金句高亮（可选，不强制）
 - 结尾前可以用一句 > ✦ 温暖收尾语 作为点睛句（可选）
@@ -813,19 +1026,15 @@ def generate_article(topic_info):
     return {"title": title, "content": content, "word_count": word_count}
 
 
-def generate_cover_image(title):
+def generate_cover_image(title, profile=None):
     """Generate cover image using Doubao Seedream, upload to IMGBB"""
     if not ARK_API_KEY or not IMGBB_API_KEY:
         log("跳过封面图生成（需要 ARK_API_KEY 和 IMGBB_API_KEY）")
         return None
 
     log("正在生成封面图...")
-    prompt = (
-        f'Warm healing watercolor illustration for an article titled "{title}". '
-        "Soft warm orange and light gold tones, cozy atmosphere, gentle light, heartwarming mood, "
-        "elements related to teenagers, family, growth, and psychology. "
-        "Emotionally warm and empathetic. High quality."
-    )
+    profile = profile or PUBLISH_PROFILES["parenting"]
+    prompt = f'Cover illustration for article "{title}". {profile["cover_prompt"]}'
     return generate_image_doubao(prompt, size="2560x1440", label="封面图")
 
 
@@ -892,17 +1101,10 @@ def generate_body_images(topic_info, title):
         return []
 
     log("正在生成正文配图...")
+    profile = topic_info.get("profile") or PUBLISH_PROFILES["parenting"]
     prompts = [
-        (
-            f"Warm watercolor illustration showing a teenager and parent having a gentle conversation "
-            f"about '{topic_info['topic']}'. Soft warm orange and light gold tones, cozy home setting, "
-            "heartwarming mood, gentle light, emotionally warm. High quality."
-        ),
-        (
-            "Warm watercolor illustration showing a caring parent listening to a child, "
-            "soft encouraging atmosphere, practical advice scene. "
-            "Soft warm orange and light gold tones, cozy, heartwarming. High quality."
-        ),
+        f"Article body illustration for '{title}', topic '{topic_info['topic']}'. {prompt}"
+        for prompt in profile["body_prompts"]
     ]
 
     urls = []
@@ -915,8 +1117,9 @@ def generate_body_images(topic_info, title):
     return urls
 
 
-def markdown_to_grace_html(markdown_content, body_images=None):
+def markdown_to_grace_html(markdown_content, body_images=None, profile=None):
     """Convert Markdown to WeChat-compatible HTML with grace theme styling (v2)"""
+    profile = profile or PUBLISH_PROFILES["parenting"]
     lines = markdown_content.strip().split("\n")
     html_parts = []
     in_list = False
@@ -1190,9 +1393,9 @@ def markdown_to_grace_html(markdown_content, body_images=None):
         f'<span style="color:#FFEAA7;font-size:14px;letter-spacing:6px;">'
         f'\u2500\u2500 \u2726 \u2500\u2500</span></div>'
         f'<p style="font-size:15px;color:#FF9F43;font-weight:bold;'
-        f'margin:4px 0 2px;letter-spacing:1px;">\u5fc3\u5149\u99a8\u8bed</p>'
+        f'margin:4px 0 2px;letter-spacing:1px;">{ACCOUNT_NAME}</p>'
         f'<p style="font-size:12px;color:#bbb;margin:0;letter-spacing:0.5px;">'
-        f'\u50cf\u95fa\u871c\u4e00\u6837\u804a\u5fc3\u7406</p>'
+        f"{ACCOUNT_TAGLINE} · {profile['column_name']}</p>"
         f"</div>"
         f"</section>"
     )
@@ -1200,13 +1403,16 @@ def markdown_to_grace_html(markdown_content, body_images=None):
     return html
 
 
-def publish_to_wechat(title, html_content, cover_url=None, article_text=""):
+def publish_to_wechat(title, html_content, cover_url=None, article_text="", profile=None):
     """Publish to WeChat Official Account"""
     log("正在发布到公众号...")
+    profile = profile or PUBLISH_PROFILES["parenting"]
 
     # Generate summary — 传入文章正文前200字作为上下文
     text_snippet = article_text[:200] if article_text else ""
     summary_prompt = f"""请为这篇公众号文章写一句摘要（20-30字），要求温暖有吸引力。
+栏目：{profile['column_name']}
+人设：{profile['persona']}
 标题：{title}
 正文摘录：{text_snippet}
 要求：只输出摘要正文，不要加引号或前缀。摘要必须与文章主题相关，15-30字。"""
@@ -1215,7 +1421,7 @@ def publish_to_wechat(title, html_content, cover_url=None, article_text=""):
         summary = summary.strip().strip('"\'').split('\n')[0].strip()
     # fallback: 从标题提取摘要
     if not summary or len(summary) < 10:
-        summary = title[:30] if len(title) > 15 else f"心理学小知识 | {title}"
+        summary = title[:30] if len(title) > 15 else f"{profile['column_name']} | {title}"
         log(f"摘要回退到标题: {summary}")
     else:
         log(f"生成摘要: {summary}")
@@ -1229,7 +1435,7 @@ def publish_to_wechat(title, html_content, cover_url=None, article_text=""):
         "title": title,
         "content": html_content,
         "contentFormat": "html",
-        "summary": summary or "心理学小知识，温暖你的每一天",
+        "summary": summary or profile["default_summary"],
         "articleType": "news",
     }
     if cover_url:
@@ -1263,10 +1469,16 @@ def publish_to_wechat(title, html_content, cover_url=None, article_text=""):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="心光馨语自动发布脚本 V1.0")
+    parser = argparse.ArgumentParser(description="心光心理学自动发布脚本 V5.0")
     parser.add_argument("--check-env", action="store_true", help="检查环境依赖")
     parser.add_argument("--dry-run", action="store_true", help="试运行（不发布）")
     parser.add_argument("--topic", type=str, help="指定话题")
+    parser.add_argument(
+        "--theme",
+        choices=sorted(PUBLISH_PROFILES.keys()),
+        help="手动指定栏目：parenting=育儿亲子，women_growth=女性自我成长",
+    )
+    parser.add_argument("--ignore-schedule", action="store_true", help="忽略周日不发布规则")
     args = parser.parse_args()
 
     # Check environment
@@ -1274,8 +1486,8 @@ def main():
         errors = []
         if not WECHAT_API_KEY:
             errors.append("未设置 WECHAT_API_KEY")
-        if not GOOGLE_API_KEY:
-            errors.append("未设置 GOOGLE_API_KEY")
+        if not DEEPSEEK_API_KEY and not ARK_API_KEY:
+            errors.append("未设置 DEEPSEEK_API_KEY 或 ARK_API_KEY")
         if not IMGBB_API_KEY:
             print("⚠️ 未设置 IMGBB_API_KEY（封面图上传将跳过）")
         for e in errors:
@@ -1293,17 +1505,41 @@ def main():
         log("❌ 未设置 WECHAT_API_KEY")
         sys.exit(1)
 
+    if args.theme:
+        profile = get_profile_by_key(args.theme)
+    else:
+        profile = get_publish_profile()
+
+    if not profile:
+        message = "今天不是心光心理学公众号的发布日（周一三五育儿，周二四六女性自我成长，周日默认不发布）"
+        if not args.ignore_schedule:
+            log(message)
+            log("如需手动运行，请加 --theme parenting 或 --theme women_growth，并加 --ignore-schedule")
+            sys.exit(0)
+        profile = PUBLISH_PROFILES["parenting"]
+        log(f"{message}；已因 --ignore-schedule 使用默认育儿栏目")
+
     log("=" * 50)
-    log("心光馨语自动发布 V1.0 开始执行")
+    log("心光心理学自动发布 V5.0 开始执行")
     log(f"日期: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    log(f"今日栏目: {profile['column_name']} | 人设: {profile['persona']}")
     if args.dry_run:
         log("⚠️ 试运行模式：不会发布到公众号")
 
     # 1. Select topic
     if args.topic:
-        topic_info = {"topic": args.topic, "category": "自定义", "keywords": args.topic}
+        topic_info = {
+            "topic": args.topic,
+            "category": profile["categories"][0],
+            "keywords": args.topic,
+            "source": "手动指定",
+            "profile": profile,
+        }
     else:
-        topic_info = select_topic()
+        topic_info = select_topic(profile=profile)
+    if not topic_info:
+        log("❌ 选题失败")
+        sys.exit(1)
 
     # 2. Generate article
     article = generate_article(topic_info)
@@ -1312,14 +1548,14 @@ def main():
         sys.exit(1)
 
     # 3. Generate cover image
-    cover_url = generate_cover_image(article["title"])
+    cover_url = generate_cover_image(article["title"], profile=profile)
 
     # 3.5 Generate body images
     body_images = generate_body_images(topic_info, article["title"])
 
     # 4. Convert to HTML
     log("正在转换 HTML（grace 主题）...")
-    html_content = markdown_to_grace_html(article["content"], body_images=body_images)
+    html_content = markdown_to_grace_html(article["content"], body_images=body_images, profile=profile)
     log(f"HTML 内容长度: {len(html_content)} 字符")
 
     # 5. Save article locally
@@ -1328,8 +1564,11 @@ def main():
     try:
         with open(md_file, "w", encoding="utf-8") as f:
             f.write(f"---\ntitle: {article['title']}\ndate: {datetime.now().strftime('%Y-%m-%d')}\n"
-                    f"category: {topic_info['category']}\nword_count: {article['word_count']}\n"
-                    f"style: 闺蜜聊天式\n---\n\n{article['content']}")
+                    f"column: {profile['column_name']}\ncategory: {topic_info['category']}\n"
+                    f"source: {topic_info.get('source', '')}\n"
+                    f"hot_ref: {topic_info.get('hot_ref', '')}\n"
+                    f"persona: {profile['persona']}\nword_count: {article['word_count']}\n"
+                    f"style: {profile['style_label']}\n---\n\n{article['content']}")
         log(f"文章已保存: {md_file}")
     except Exception as e:
         log(f"文件保存失败: {e}")
@@ -1338,6 +1577,7 @@ def main():
     if args.dry_run:
         log("=" * 50)
         log("✅ 试运行完成")
+        log(f"栏目: {profile['column_name']}")
         log(f"标题: {article['title']}")
         log(f"字数: {article['word_count']}")
         log(f"封面图: {cover_url or '无'}")
@@ -1346,7 +1586,7 @@ def main():
 
     # 6. Publish
     success = publish_to_wechat(article["title"], html_content, cover_url,
-                               article_text=article["content"])
+                               article_text=article["content"], profile=profile)
 
     if success:
         log("✅ 发布成功！")
@@ -1357,7 +1597,7 @@ def main():
             subprocess.run(["git", "config", "user.name", "GitHub Actions"], check=True, cwd=WORK_DIR)
             subprocess.run(["git", "config", "user.email", "actions@github.com"], check=True, cwd=WORK_DIR)
             subprocess.run(["git", "add", f"article_{today_str}.md"], check=True, cwd=WORK_DIR)
-            commit_msg = f"chore: 自动发布心光馨语 {datetime.now().strftime('%Y-%m-%d')} - {article['title']}"
+            commit_msg = f"chore: 自动发布心光心理学 {datetime.now().strftime('%Y-%m-%d')} - {article['title']}"
             subprocess.run(["git", "commit", "-m", commit_msg], check=True, cwd=WORK_DIR)
             subprocess.run(["git", "push"], check=True, cwd=WORK_DIR)
             log("✅ 文件已提交到 Git 仓库")

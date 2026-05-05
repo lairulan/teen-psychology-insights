@@ -1,32 +1,42 @@
-# teen-psychology-insights STATUS v4.1 — 2026-04-08
+# teen-psychology-insights STATUS v5.0 — 2026-05-05
 
-## 断点
-- **本次完成（v4.1）**：接入 Bing News RSS 垂直搜索替换泛热搜 — 5个精准搜索词（青少年心理/情绪焦虑/亲子沟通/厌学压力/青春期叛逆），每日25条100%相关资讯，无需API Key，无频率限制；天行热搜降为第2层兜底
-- **上一版本（v4.0）**：DeepSeek V3 替换 Gemini，豆包 Seedream 为唯一配图引擎，移除 GOOGLE_API_KEY 依赖，修复停更 8 天问题
-- **下一步**：日常运营，GitHub Actions 每天 11:00（北京时间）自动触发，人工到草稿箱审核后发布
+## 本次定位调整
 
-## 选题漏斗（v4.1 新架构）
-1. **Bing News 垂直搜索**（主力）— 5词 × 5条 = 25条精准资讯，100%相关
-2. **天行多平台热搜**（兜底）— 微博/抖音/腾讯轮换，注意百度/全网频率受限
-3. **日历时令选题** — 按月份15个话题，稳定有效
-4. **话题池轮询** — 56个常备话题，极端兜底
-
-## 环境
-- 脚本：`scripts/auto_publish.py`（唯一入口）
-- 手动触发：`cd ~/.claude/skills/teen-psychology-insights && DEEPSEEK_API_KEY="..." ARK_API_KEY="..." WECHAT_API_KEY="..." IMGBB_API_KEY="..." python3 scripts/auto_publish.py`
-- GitHub Actions cron：`0 3 * * *`（UTC）= 北京时间 11:00
-- GitHub Secrets 已配置：WECHAT_API_KEY / DEEPSEEK_API_KEY / ARK_API_KEY / IMGBB_API_KEY
+- 公众号定位从原“心光馨语/轻松心理学日更”调整为“心光心理学/双栏目运营”。
+- 周一、周三、周五：微博热搜驱动育儿与亲子沟通文章。
+- 周二、周四、周六：女性自我成长文章，采用温暖、专业的心理动力学咨询师视角。
+- 周日默认跳过，避免继续日更旧定位。
 
 ## 关键配置
-- 公众号：心光馨语 / AppID：wx52189e9b012018e1
-- 文字引擎：DeepSeek V3（deepseek-chat）主力，豆包 doubao-seed-2-0-lite 兜底
-- 图片引擎：豆包 Seedream（doubao-seedream-4-5-251128）→ imgbb 永久托管
-- 排版：grace 主题，暖橙色调 #FF9F43，封面图 2560×1440，正文配图 1920×1920
 
-## 已知问题
-- 天行 API 百度/全网接口频率受限（code=130），实际只有微博/抖音/腾讯 3 个平台有效（v4.1 已降为兜底层，不影响主流程）
+- 公众号：心光心理学
+- AppID：`wx52189e9b012018e1`
+- 脚本入口：`scripts/auto_publish.py`
+- 手动触发：
+  ```bash
+  cd ~/.claude/skills/teen-psychology-insights/scripts
+  python3 auto_publish.py --dry-run
+  ```
+- 强制指定栏目：
+  ```bash
+  python3 auto_publish.py --theme parenting --topic "孩子顶嘴时父母怎么回应" --dry-run
+  python3 auto_publish.py --theme women_growth --topic "为什么总是在关系里先照顾别人" --dry-run
+  ```
 
-## 勿碰
-- `scripts/auto_publish.py` 中的 AppID，已与 GitHub Secrets 保持一致
-- `.github/workflows/daily-publish.yml` cron 配置
-- GitHub Secrets：DEEPSEEK_API_KEY / ARK_API_KEY（不可明文写入代码）
+## 调度
+
+- Cloudflare Worker：`~/cloudflare-workers/github-scheduler/`
+- 事件：`repository_dispatch: daily-psychology`
+- 时间：每天 20:00 北京时间触发；Worker 限制周一至周六，脚本内部也会在周日跳过。
+
+## 环境
+
+- `WECHAT_API_KEY`
+- `DEEPSEEK_API_KEY` 或 `ARK_API_KEY`
+- `ARK_API_KEY` + `IMGBB_API_KEY` 用于豆包 Seedream 配图与图片托管
+
+## 注意
+
+- 不要恢复 GitHub Actions 原生 `schedule`，定时任务统一走 Cloudflare Worker。
+- 不要把 API Key 写进仓库。
+- 发布接口仍使用 AppID，不依赖本地显示名称。

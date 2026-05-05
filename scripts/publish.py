@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-心光馨语微信公众号发布脚本
+心光心理学微信公众号发布脚本
 支持通过 API 或调用 baoyu-post-to-wechat skill 发布
 """
 
@@ -10,7 +10,7 @@ import re
 import sys
 
 APPID = os.environ.get("WECHAT_APP_ID", "")
-ACCOUNT_NAME = "心光馨语"
+ACCOUNT_NAME = "心光心理学"
 
 
 def read_markdown_file(file_path):
@@ -79,7 +79,7 @@ def publish_to_wechat(title, content_file, summary, cover, draft=True):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="心光馨语微信公众号发布脚本")
+    parser = argparse.ArgumentParser(description="心光心理学微信公众号发布脚本")
     subparsers = parser.add_subparsers(dest="command", help="Command")
 
     pub = subparsers.add_parser("publish", help="Publish article")

@@ -1,84 +1,58 @@
-# 心光馨语 - 轻松心理学公众号
+# 心光心理学公众号自动发布
 
-像闺蜜聊天一样讲心理学。每日一篇 800-1200 字轻松短文，配温暖治愈系插画，发布到"心光馨语"微信公众号。
+按新的公众号定位运行：
 
-## 特性
-
-- **闺蜜聊天式**：口语化表达，零术语，像朋友分享经验
-- **热点驱动选题**：基于知乎、微博、小红书热搜自动选题
-- **轻松短文**：800-1200 字，手机阅读友好
-- **温暖配图**：Google Gemini Imagen 生成暖橙水彩插画
-- **优雅排版**：grace 主题，暖橙浅金色调
-- **一键发布**：支持发布到微信公众号
+- 周一、周三、周五：根据微博热搜生成育儿主题文章，风格温馨、亲切，人设是一位温柔亲切的亲子沟通培训师。
+- 周二、周四、周六：发布女性自我成长主题文章，人设是一位温暖、专业的心理动力学方向心理咨询师。
+- 周日默认不发布。
 
 ## 快速开始
 
 ```bash
-# 默认：基于热搜自动选题
-claude "心光馨语"
+cd ~/.claude/skills/teen-psychology-insights/scripts
+python3 auto_publish.py --dry-run
+```
 
-# 指定主题
-claude "心光馨语 主题:考试焦虑"
+手动指定栏目：
 
-# 生成并发布
-claude "心光馨语 发布:是"
+```bash
+python3 auto_publish.py --theme parenting --topic "孩子写作业拖拉怎么办" --dry-run
+python3 auto_publish.py --theme women_growth --topic "为什么总是在关系里先照顾别人" --dry-run
 ```
 
 ## 公众号信息
 
 | 项目 | 值 |
 |------|-----|
-| 公众号名称 | 心光馨语 |
-| AppID | ${WECHAT_APP_ID} |
+| 公众号名称 | 心光心理学 |
+| AppID | `wx52189e9b012018e1` |
+| 自动化入口 | `scripts/auto_publish.py` |
+| 调度 | Cloudflare Worker `github-scheduler` 每天 20:00 北京时间触发；脚本内部周日跳过 |
 
-## 配置
-
-### 环境变量
+## 环境变量
 
 ```bash
-# 配图生成（Google Gemini Imagen）
-export GOOGLE_API_KEY='your_google_api_key_here'
-
-# 微信公众号发布
-export WECHAT_API_KEY='your_wechat_api_key_here'
+export WECHAT_API_KEY='...'
+export DEEPSEEK_API_KEY='...'   # 或 ARK_API_KEY
+export ARK_API_KEY='...'        # 配图需要
+export IMGBB_API_KEY='...'      # 配图托管需要
 ```
-
-### 输出目录
-
-文章保存到：`~/Documents/Obsidian/心光馨语/`
 
 ## 文件结构
 
-```
+```text
 teen-psychology-insights/
-├── SKILL.md                     # 核心技能定义 (v2.0)
-├── README.md                    # 本文档
-├── QUICKSTART.md                # 快速开始指南
-└── scripts/
-    ├── generate_image.py       # Google Gemini Imagen 配图脚本
-    ├── publish.py              # 微信公众号发布脚本
-    └── test_image_generation.py # 配图测试脚本
+├── SKILL.md
+├── README.md
+├── STATUS.md
+├── scripts/
+│   ├── auto_publish.py
+│   ├── generate_image.py
+│   └── publish.py
+└── .github/workflows/daily-publish.yml
 ```
 
-## 排版方案
+## 版本
 
-- **主题**：baoyu-markdown-to-html grace 主题
-- **配色**：暖橙 #FF9F43 + 浅金 #FFEAA7
-- **风格**：圆角卡片、柔和阴影、暖色引用块
-- **正文**：16px，行距 1.8
-
-## 覆盖领域
-
-1. 学业压力：考试焦虑、学习动力、拖延症
-2. 人际关系：同伴交往、社交恐惧、校园冲突
-3. 情绪管理：情绪失控、挫折应对、焦虑缓解
-4. 自我认知：自我价值、青春期困惑
-5. 亲子沟通：叛逆期、沟通技巧
-6. 趣味心理：心理实验、冷知识、性格测试
-
-## 版本历史
-
-| 版本 | 日期 | 更新内容 |
-|------|------|----------|
-| 2.0 | 2026-03-10 | 公众号改为"心光馨语"，闺蜜聊天式短文，grace 排版，Google Gemini 配图 |
-| 1.0 | 2026-02-02 | 初始版本 |
+- v5.0：双栏目定位，周一三五育儿亲子，周二四六女性自我成长。
+- v4.x：原“心光馨语”青少年心理/亲子关系日更逻辑。

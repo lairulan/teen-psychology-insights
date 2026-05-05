@@ -1,4 +1,4 @@
-name: 心光馨语每日发布
+name: 心光心理学周一至周六发布
 
 on:
   # GitHub Actions 自带定时触发（UTC 03:00 = 北京时间 11:00）
@@ -29,7 +29,7 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: 生成并发布心理学文章
+      - name: 生成并发布心光心理学文章
         env:
           WECHAT_API_KEY: ${{ secrets.WECHAT_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -52,7 +52,7 @@ jobs:
             echo "尝试 $((RETRY_COUNT + 1))/$MAX_RETRIES..."
 
             if python3 auto_publish.py 2>&1; then
-              echo "✅ 心光馨语文章发布成功！"
+              echo "✅ 心光心理学文章发布成功！"
               exit 0
             else
               RETRY_COUNT=$((RETRY_COUNT + 1))
