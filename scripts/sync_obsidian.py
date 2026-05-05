@@ -9,6 +9,8 @@ GitHub Actions cannot write to a Mac-local Obsidian vault. The intended flow is:
 """
 
 import argparse
+import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -22,6 +24,7 @@ from pathlib import Path
 REPO_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_VAULT_DIR = Path.home() / "Documents" / "Obsidian" / "02-内容创作" / "心光心理学"
 DEFAULT_ATTACHMENTS_DIR_NAME = "附件库"
+SYNC_STATE_FILE_NAME = ".xingguang-sync-state.json"
 ARTICLE_RE = re.compile(r"article_(\d{8})\.md$")
 MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 MARKDOWN_LOCAL_ATTACHMENT_RE = re.compile(r"(?<!!)\[([^\]]+)\]\(([^)]+)\)")
@@ -60,6 +63,41 @@ def sanitize_filename(text, max_len=72):
     text = re.sub(r"[\\/:*?\"<>|#\[\]\n\r\t]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:max_len].rstrip(" .") or "未命名文章"
+
+
+def text_hash(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def state_key(vault_dir, path):
+    return path.relative_to(vault_dir).as_posix()
+
+
+def load_sync_state(vault_dir):
+    state_path = vault_dir / SYNC_STATE_FILE_NAME
+    if not state_path.exists():
+        return {"version": 1, "files": {}}
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"version": 1, "files": {}}
+    if not isinstance(state, dict):
+        return {"version": 1, "files": {}}
+    state.setdefault("version", 1)
+    state.setdefault("files", {})
+    return state
+
+
+def write_sync_state(vault_dir, state, dry_run=False):
+    state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if dry_run:
+        print(f"[dry-run] would write sync state: {vault_dir / SYNC_STATE_FILE_NAME}")
+        return
+    vault_dir.mkdir(parents=True, exist_ok=True)
+    (vault_dir / SYNC_STATE_FILE_NAME).write_text(
+        json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def is_remote(src):
@@ -227,31 +265,67 @@ def build_destination(vault_dir, meta, date_text, source_path):
     return target_dir / filename
 
 
-def cleanup_same_day_articles(destination, date_text, dry_run=False):
+def is_unmodified_synced_file(path, vault_dir, state):
+    try:
+        key = state_key(vault_dir, path)
+        synced_hash = state.get("files", {}).get(key, {}).get("synced_hash")
+        if not synced_hash:
+            return False
+        return text_hash(path.read_text(encoding="utf-8")) == synced_hash
+    except (OSError, UnicodeDecodeError, ValueError):
+        return False
+
+
+def cleanup_same_day_articles(destination, date_text, vault_dir, state, dry_run=False, overwrite_local=False):
     if not destination.parent.exists():
-        return 0
+        return 0, 0
     removed = 0
+    skipped = 0
     for old_path in destination.parent.glob(f"{date_text} *.md"):
         if old_path == destination:
             continue
+        if not overwrite_local and not is_unmodified_synced_file(old_path, vault_dir, state):
+            skipped += 1
+            continue
         removed += 1
         if not dry_run:
+            state.get("files", {}).pop(state_key(vault_dir, old_path), None)
             old_path.unlink()
-    return removed
+    return removed, skipped
 
 
-def copy_if_changed(source_text, destination, dry_run=False):
+def copy_if_changed(source_text, destination, vault_dir, state, dry_run=False, overwrite_local=False):
+    files_state = state.setdefault("files", {})
+    key = state_key(vault_dir, destination)
+    source_hash = text_hash(source_text)
     existed = destination.exists()
     if destination.exists():
         try:
-            if destination.read_text(encoding="utf-8") == source_text:
+            current_text = destination.read_text(encoding="utf-8")
+            current_hash = text_hash(current_text)
+            if current_text == source_text:
+                files_state[key] = {
+                    "synced_hash": source_hash,
+                    "source": "repo",
+                    "synced_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
                 return "unchanged"
         except UnicodeDecodeError:
-            pass
+            return "local_modified"
+
+        last_synced_hash = files_state.get(key, {}).get("synced_hash")
+        if not overwrite_local and current_hash != last_synced_hash:
+            return "local_modified"
+
     if dry_run:
         return "would_update" if destination.exists() else "would_create"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(source_text, encoding="utf-8")
+    files_state[key] = {
+        "synced_hash": source_hash,
+        "source": "repo",
+        "synced_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
     return "updated" if existed else "created"
 
 
@@ -296,16 +370,19 @@ def write_index(vault_dir, records, dry_run=False):
     index_path.write_text(content, encoding="utf-8")
 
 
-def sync_articles(repo_dir, vault_dir, attachments_dir=None, days=None, dry_run=False):
+def sync_articles(repo_dir, vault_dir, attachments_dir=None, days=None, dry_run=False, overwrite_local=False):
     records = []
     attachments_dir = attachments_dir or (vault_dir / DEFAULT_ATTACHMENTS_DIR_NAME)
+    sync_state = load_sync_state(vault_dir)
     counts = {
         "created": 0,
         "updated": 0,
         "unchanged": 0,
+        "local_modified": 0,
         "would_create": 0,
         "would_update": 0,
         "removed_old": 0,
+        "skipped_old": 0,
     }
     if not dry_run:
         attachments_dir.mkdir(parents=True, exist_ok=True)
@@ -324,9 +401,24 @@ def sync_articles(repo_dir, vault_dir, attachments_dir=None, days=None, dry_run=
             title,
             dry_run=dry_run,
         )
-        removed = cleanup_same_day_articles(destination, date_text, dry_run=dry_run)
+        removed, skipped_old = cleanup_same_day_articles(
+            destination,
+            date_text,
+            vault_dir,
+            sync_state,
+            dry_run=dry_run,
+            overwrite_local=overwrite_local,
+        )
         counts["removed_old"] += removed
-        status = copy_if_changed(content, destination, dry_run=dry_run)
+        counts["skipped_old"] += skipped_old
+        status = copy_if_changed(
+            content,
+            destination,
+            vault_dir,
+            sync_state,
+            dry_run=dry_run,
+            overwrite_local=overwrite_local,
+        )
         counts[status] = counts.get(status, 0) + 1
         records.append(
             {
@@ -340,6 +432,7 @@ def sync_articles(repo_dir, vault_dir, attachments_dir=None, days=None, dry_run=
         )
 
     write_index(vault_dir, records, dry_run=dry_run)
+    write_sync_state(vault_dir, sync_state, dry_run=dry_run)
     return counts, records
 
 
@@ -351,6 +444,7 @@ def main():
     parser.add_argument("--pull", action="store_true", help="先执行 git pull --ff-only")
     parser.add_argument("--days", type=int, help="只同步最近 N 天文章；默认同步全部")
     parser.add_argument("--dry-run", action="store_true", help="只预览，不写文件")
+    parser.add_argument("--overwrite-local", action="store_true", help="允许覆盖 Obsidian 中已被手动修改的文章")
     args = parser.parse_args()
 
     repo_dir = Path(args.repo).expanduser().resolve()
@@ -370,6 +464,7 @@ def main():
         attachments_dir=attachments_dir,
         days=args.days,
         dry_run=args.dry_run,
+        overwrite_local=args.overwrite_local,
     )
     print(f"Obsidian target: {vault_dir}")
     print(f"Attachment library: {attachments_dir}")
@@ -379,8 +474,11 @@ def main():
         f"{counts.get('created', 0)} created, "
         f"{counts.get('updated', 0)} updated, "
         f"{counts.get('unchanged', 0)} unchanged, "
+        f"{counts.get('local_modified', 0)} local modified skipped, "
         f"{counts.get('removed_old', 0)} old same-day files removed"
     )
+    if counts.get("skipped_old", 0):
+        print(f"Skipped old same-day files with local edits: {counts.get('skipped_old', 0)}")
     if args.dry_run:
         print(
             "Dry run: "
