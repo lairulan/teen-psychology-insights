@@ -13,13 +13,24 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
 
 REPO_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_VAULT_DIR = Path.home() / "Documents" / "Obsidian" / "02-内容创作" / "心光心理学"
+DEFAULT_ATTACHMENTS_DIR_NAME = "附件库"
 ARTICLE_RE = re.compile(r"article_(\d{8})\.md$")
+MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+MARKDOWN_LOCAL_ATTACHMENT_RE = re.compile(r"(?<!!)\[([^\]]+)\]\(([^)]+)\)")
+HTML_IMAGE_RE = re.compile(r"<img\b([^>]*?)\bsrc=[\"']([^\"']+)[\"']([^>]*)>", re.IGNORECASE)
+ATTACHMENT_EXTENSIONS = {
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".zip", ".rar", ".7z", ".csv", ".txt", ".md",
+}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 
 
 def parse_frontmatter(content):
@@ -49,6 +60,120 @@ def sanitize_filename(text, max_len=72):
     text = re.sub(r"[\\/:*?\"<>|#\[\]\n\r\t]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:max_len].rstrip(" .") or "未命名文章"
+
+
+def is_remote(src):
+    parsed = urllib.parse.urlparse(src)
+    return parsed.scheme in {"http", "https"}
+
+
+def is_wiki_embed(src):
+    return src.startswith("[[") or src.startswith("附件库/")
+
+
+def extension_from_src(src, default=".png"):
+    parsed = urllib.parse.urlparse(src)
+    ext = Path(parsed.path).suffix.lower()
+    if ext and len(ext) <= 8:
+        return ".jpg" if ext == ".jpeg" else ext
+    return default
+
+
+def copy_or_download_asset(src, attachments_dir, prefix, index, dry_run=False):
+    if not src or is_wiki_embed(src) or src.startswith("#") or src.startswith("mailto:"):
+        return None
+
+    clean_src = src.strip().strip("<>")
+    ext = extension_from_src(clean_src)
+    filename = sanitize_filename(f"{prefix}-{index:02d}", max_len=90) + ext
+    destination = attachments_dir / filename
+
+    if dry_run or destination.exists():
+        return destination
+
+    attachments_dir.mkdir(parents=True, exist_ok=True)
+    if is_remote(clean_src):
+        req = urllib.request.Request(clean_src, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            destination.write_bytes(resp.read())
+        return destination
+
+    local_path = Path(urllib.parse.unquote(clean_src)).expanduser()
+    if not local_path.is_absolute():
+        local_path = (REPO_DIR / local_path).resolve()
+    if not local_path.exists():
+        return None
+    shutil.copy2(local_path, destination)
+    return destination
+
+
+def obsidian_asset_ref(vault_dir, asset_path, embed=True, label=None):
+    rel = asset_path.relative_to(vault_dir).as_posix()
+    if embed:
+        return f"![[{rel}]]"
+    if label:
+        return f"[[{rel}|{label}]]"
+    return f"[[{rel}]]"
+
+
+def prepare_content_assets(content, vault_dir, attachments_dir, date_text, title, dry_run=False):
+    """Copy/download markdown assets into the central Obsidian attachment folder."""
+    prefix = f"{date_text}-{sanitize_filename(title, max_len=40)}"
+    image_idx = 0
+    attachment_idx = 0
+
+    def replace_markdown_image(match):
+        nonlocal image_idx
+        alt = match.group(1)
+        src = match.group(2).strip()
+        if src.startswith("[["):
+            return match.group(0)
+        image_idx += 1
+        try:
+            asset_path = copy_or_download_asset(src, attachments_dir, f"{prefix}-image", image_idx, dry_run=dry_run)
+        except Exception as exc:
+            print(f"Warning: failed to sync image {src}: {exc}", file=sys.stderr)
+            return match.group(0)
+        if not asset_path:
+            return match.group(0)
+        return obsidian_asset_ref(vault_dir, asset_path, embed=True)
+
+    def replace_html_image(match):
+        nonlocal image_idx
+        src = match.group(2).strip()
+        image_idx += 1
+        try:
+            asset_path = copy_or_download_asset(src, attachments_dir, f"{prefix}-image", image_idx, dry_run=dry_run)
+        except Exception as exc:
+            print(f"Warning: failed to sync html image {src}: {exc}", file=sys.stderr)
+            return match.group(0)
+        if not asset_path:
+            return match.group(0)
+        return obsidian_asset_ref(vault_dir, asset_path, embed=True)
+
+    def replace_local_attachment(match):
+        nonlocal attachment_idx
+        label = match.group(1)
+        src = match.group(2).strip()
+        if is_remote(src) or src.startswith("#"):
+            return match.group(0)
+        ext = extension_from_src(src, default="")
+        if ext.lower() not in ATTACHMENT_EXTENSIONS:
+            return match.group(0)
+        attachment_idx += 1
+        try:
+            asset_path = copy_or_download_asset(src, attachments_dir, f"{prefix}-attachment", attachment_idx, dry_run=dry_run)
+        except Exception as exc:
+            print(f"Warning: failed to sync attachment {src}: {exc}", file=sys.stderr)
+            return match.group(0)
+        if not asset_path:
+            return match.group(0)
+        return obsidian_asset_ref(vault_dir, asset_path, embed=False, label=label)
+
+    content = MARKDOWN_IMAGE_RE.sub(replace_markdown_image, content)
+    content = HTML_IMAGE_RE.sub(replace_html_image, content)
+    content = MARKDOWN_LOCAL_ATTACHMENT_RE.sub(replace_local_attachment, content)
+    return content
 
 
 def infer_column(meta):
@@ -102,8 +227,20 @@ def build_destination(vault_dir, meta, date_text, source_path):
     return target_dir / filename
 
 
-def copy_if_changed(source, destination, dry_run=False):
-    source_text = source.read_text(encoding="utf-8")
+def cleanup_same_day_articles(destination, date_text, dry_run=False):
+    if not destination.parent.exists():
+        return 0
+    removed = 0
+    for old_path in destination.parent.glob(f"{date_text} *.md"):
+        if old_path == destination:
+            continue
+        removed += 1
+        if not dry_run:
+            old_path.unlink()
+    return removed
+
+
+def copy_if_changed(source_text, destination, dry_run=False):
     existed = destination.exists()
     if destination.exists():
         try:
@@ -159,16 +296,37 @@ def write_index(vault_dir, records, dry_run=False):
     index_path.write_text(content, encoding="utf-8")
 
 
-def sync_articles(repo_dir, vault_dir, days=None, dry_run=False):
+def sync_articles(repo_dir, vault_dir, attachments_dir=None, days=None, dry_run=False):
     records = []
-    counts = {"created": 0, "updated": 0, "unchanged": 0, "would_create": 0, "would_update": 0}
+    attachments_dir = attachments_dir or (vault_dir / DEFAULT_ATTACHMENTS_DIR_NAME)
+    counts = {
+        "created": 0,
+        "updated": 0,
+        "unchanged": 0,
+        "would_create": 0,
+        "would_update": 0,
+        "removed_old": 0,
+    }
+    if not dry_run:
+        attachments_dir.mkdir(parents=True, exist_ok=True)
 
     for source, date_text in iter_articles(repo_dir, days=days):
         content = source.read_text(encoding="utf-8")
         meta, _ = parse_frontmatter(content)
         meta.setdefault("date", date_text)
         destination = build_destination(vault_dir, meta, date_text, source)
-        status = copy_if_changed(source, destination, dry_run=dry_run)
+        title = meta.get("title") or source.stem
+        content = prepare_content_assets(
+            content,
+            vault_dir,
+            attachments_dir,
+            date_text,
+            title,
+            dry_run=dry_run,
+        )
+        removed = cleanup_same_day_articles(destination, date_text, dry_run=dry_run)
+        counts["removed_old"] += removed
+        status = copy_if_changed(content, destination, dry_run=dry_run)
         counts[status] = counts.get(status, 0) + 1
         records.append(
             {
@@ -189,6 +347,7 @@ def main():
     parser = argparse.ArgumentParser(description="同步心光心理学文章到本地 Obsidian 知识库")
     parser.add_argument("--repo", default=str(REPO_DIR), help="teen-psychology-insights repo path")
     parser.add_argument("--vault", default=str(DEFAULT_VAULT_DIR), help="Obsidian target folder")
+    parser.add_argument("--attachments", help="Obsidian attachment folder; default is <vault>/附件库")
     parser.add_argument("--pull", action="store_true", help="先执行 git pull --ff-only")
     parser.add_argument("--days", type=int, help="只同步最近 N 天文章；默认同步全部")
     parser.add_argument("--dry-run", action="store_true", help="只预览，不写文件")
@@ -196,18 +355,31 @@ def main():
 
     repo_dir = Path(args.repo).expanduser().resolve()
     vault_dir = Path(args.vault).expanduser().resolve()
+    attachments_dir = (
+        Path(args.attachments).expanduser().resolve()
+        if args.attachments
+        else vault_dir / DEFAULT_ATTACHMENTS_DIR_NAME
+    )
 
     if args.pull:
         run_pull(repo_dir)
 
-    counts, records = sync_articles(repo_dir, vault_dir, days=args.days, dry_run=args.dry_run)
+    counts, records = sync_articles(
+        repo_dir,
+        vault_dir,
+        attachments_dir=attachments_dir,
+        days=args.days,
+        dry_run=args.dry_run,
+    )
     print(f"Obsidian target: {vault_dir}")
+    print(f"Attachment library: {attachments_dir}")
     print(
         "Synced articles: "
         f"{len(records)} total, "
         f"{counts.get('created', 0)} created, "
         f"{counts.get('updated', 0)} updated, "
-        f"{counts.get('unchanged', 0)} unchanged"
+        f"{counts.get('unchanged', 0)} unchanged, "
+        f"{counts.get('removed_old', 0)} old same-day files removed"
     )
     if args.dry_run:
         print(

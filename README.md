@@ -20,6 +20,12 @@ python3 auto_publish.py --theme parenting --topic "孩子写作业拖拉怎么�
 python3 auto_publish.py --theme women_growth --topic "为什么总是在关系里先照顾别人" --dry-run
 ```
 
+只生成审稿稿件，不推送公众号草稿箱：
+
+```bash
+python3 auto_publish.py --review-only
+```
+
 ## 公众号信息
 
 | 项目 | 值 |
@@ -63,6 +69,12 @@ GitHub Actions 在云端运行，不能直接写入本机 Obsidian。文章会�
 ~/Documents/Obsidian/02-内容创作/心光心理学/
 ```
 
+统一附件库：
+
+```text
+~/Documents/Obsidian/02-内容创作/心光心理学/附件库/
+```
+
 手动同步：
 
 ```bash
@@ -71,9 +83,11 @@ python3 scripts/sync_obsidian.py --pull
 ```
 
 同步后会按栏目分目录，并生成 `心光心理学内容索引.md`。
+如果文章里有远程图片、HTML 图片或本地附件链接，同步脚本会复制或下载到 `附件库`，并改写为 Obsidian 内部链接。同一天标题变化时，会自动清理同日期旧文件。
 
 ## 版本
 
+- v5.3：新增审稿模式和 Obsidian 统一附件库。
 - v5.2：增强人设专业框架，并新增本地 Obsidian 同步脚本。
 - v5.1：加入硬去重、内容家族冷却、泛标题和质量门禁。
 - v5.0：双栏目定位，周一三五育儿亲子，周二四六女性自我成长。

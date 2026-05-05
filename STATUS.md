@@ -1,4 +1,12 @@
-# teen-psychology-insights STATUS v5.2 — 2026-05-05
+# teen-psychology-insights STATUS v5.3 — 2026-05-05
+
+## 本次同步与审稿流程优化
+
+- 本地 Obsidian 同步自动化时间改为 21:30（周一至周六）。
+- Obsidian 新增统一附件库：`~/Documents/Obsidian/02-内容创作/心光心理学/附件库/`。
+- `sync_obsidian.py` 会把文章里的远程图片、HTML 图片、本地附件链接复制或下载到附件库，并改写为 Obsidian 内部链接。
+- 同一天如果标题变化，同步时会清理同日期旧文件，避免同一篇文章在 Obsidian 出现多个版本。
+- `auto_publish.py` 新增 `--review-only`：生成文章、图片、提交 GitHub，但跳过公众号草稿箱推送。该模式尚未在 GitHub workflow 中启用。
 
 ## 本次人设与知识库优化
 
@@ -44,6 +52,10 @@
   ```bash
   python3 scripts/sync_obsidian.py --pull
   ```
+- 审稿模式：
+  ```bash
+  python3 scripts/auto_publish.py --review-only
+  ```
 
 ## 调度
 
@@ -63,3 +75,4 @@
 - 不要把 API Key 写进仓库。
 - 发布接口仍使用 AppID，不依赖本地显示名称。
 - GitHub Actions 不能直接写本机 Obsidian；本地知识库通过同步脚本或本机定时任务更新。
+- 如果要切换成“GitHub 只生成 -> Obsidian 审稿 -> 手动推送公众号草稿箱”，下一步需要把 workflow 命令改为 `python3 auto_publish.py --review-only`，再补一个从 Obsidian 文件推送草稿箱的本地发布脚本。

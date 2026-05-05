@@ -1512,6 +1512,16 @@ def generate_body_images(topic_info, title):
     return urls
 
 
+def inject_markdown_images(markdown_content, body_images=None):
+    """Replace generated image placeholders with Markdown images for Obsidian review."""
+    content = markdown_content
+    for idx, url in enumerate(body_images or [], start=1):
+        placeholder = f"<!-- IMG_PLACEHOLDER_{idx} -->"
+        markdown_image = f"![正文配图{idx}]({url})"
+        content = content.replace(placeholder, markdown_image, 1)
+    return content
+
+
 def markdown_to_grace_html(markdown_content, body_images=None, profile=None):
     """Convert Markdown to WeChat-compatible HTML with grace theme styling (v2)"""
     profile = profile or PUBLISH_PROFILES["parenting"]
@@ -1867,6 +1877,7 @@ def main():
     parser = argparse.ArgumentParser(description="心光心理学自动发布脚本 V5.2")
     parser.add_argument("--check-env", action="store_true", help="检查环境依赖")
     parser.add_argument("--dry-run", action="store_true", help="试运行（不发布）")
+    parser.add_argument("--review-only", action="store_true", help="只生成并提交文章，不推送公众号草稿箱")
     parser.add_argument("--topic", type=str, help="指定话题")
     parser.add_argument(
         "--theme",
@@ -1896,7 +1907,7 @@ def main():
     if not DEEPSEEK_API_KEY and not ARK_API_KEY:
         log("❌ 未设置 DEEPSEEK_API_KEY 或 ARK_API_KEY，至少需要一个文本生成 API")
         sys.exit(1)
-    if not WECHAT_API_KEY and not args.dry_run:
+    if not WECHAT_API_KEY and not args.dry_run and not args.review_only:
         log("❌ 未设置 WECHAT_API_KEY")
         sys.exit(1)
 
@@ -1920,6 +1931,8 @@ def main():
     log(f"今日栏目: {profile['column_name']} | 人设: {profile['persona']}")
     if args.dry_run:
         log("⚠️ 试运行模式：不会发布到公众号")
+    if args.review_only:
+        log("📝 审稿模式：会生成并提交文章，但不会推送公众号草稿箱")
 
     # 1. Select topic
     if args.topic:
@@ -1976,6 +1989,9 @@ def main():
     family = detect_content_family(" ".join([article["title"], topic_info.get("topic", ""), topic_info.get("hot_ref", "")]))
     family_label = family[1] if family else ""
     try:
+        saved_content = inject_markdown_images(article["content"], body_images=body_images)
+        cover_line = f"cover_image_url: {cover_url or ''}\n"
+        body_images_line = f"body_image_urls: {' | '.join(body_images)}\n"
         with open(md_file, "w", encoding="utf-8") as f:
             f.write(f"---\ntitle: {article['title']}\ndate: {datetime.now().strftime('%Y-%m-%d')}\n"
                     f"column: {profile['column_name']}\ncategory: {topic_info['category']}\n"
@@ -1983,8 +1999,10 @@ def main():
                     f"source: {topic_info.get('source', '')}\n"
                     f"hot_ref: {topic_info.get('hot_ref', '')}\n"
                     f"topic_family: {family_label}\n"
+                    f"{cover_line}"
+                    f"{body_images_line}"
                     f"persona: {profile['persona']}\nword_count: {article['word_count']}\n"
-                    f"style: {profile['style_label']}\n---\n\n{article['content']}")
+                    f"style: {profile['style_label']}\n---\n\n{saved_content}")
         log(f"文章已保存: {md_file}")
     except Exception as e:
         log(f"文件保存失败: {e}")
@@ -2000,12 +2018,19 @@ def main():
         log("=" * 50)
         sys.exit(0)
 
-    # 6. Publish
-    success = publish_to_wechat(article["title"], html_content, cover_url,
-                               article_text=article["content"], profile=profile)
+    # 6. Publish, or keep for Obsidian review only.
+    if args.review_only:
+        success = True
+        log("📝 审稿模式：已跳过公众号草稿箱推送")
+    else:
+        success = publish_to_wechat(article["title"], html_content, cover_url,
+                                   article_text=article["content"], profile=profile)
 
     if success:
-        log("✅ 发布成功！")
+        if args.review_only:
+            log("✅ 审稿稿件已生成并准备提交")
+        else:
+            log("✅ 发布成功！")
 
         # Git commit
         try:

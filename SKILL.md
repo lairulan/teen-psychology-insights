@@ -84,6 +84,12 @@ python3 auto_publish.py --theme parenting --ignore-schedule
 python3 scripts/sync_obsidian.py --pull
 ```
 
+只生成审稿稿件，不推送公众号草稿箱：
+
+```bash
+python3 scripts/auto_publish.py --review-only
+```
+
 ## 质量检查
 
 - 标题温暖、有生活感，不使用恐吓式表达。
@@ -103,10 +109,19 @@ python3 scripts/sync_obsidian.py --pull
 
 `sync_obsidian.py` 会把仓库里的 `article_*.md` 按栏目复制到 Obsidian，并更新 `心光心理学内容索引.md`。GitHub Actions 只能写远端仓库，本地 Obsidian 需要本机同步任务拉取后复制。
 
+统一附件库：
+
+```text
+~/Documents/Obsidian/02-内容创作/心光心理学/附件库/
+```
+
+同步脚本会把文章里的远程图片、HTML 图片和本地附件链接统一下载或复制到 `附件库`，再把正文链接改写成 Obsidian 内部链接。同一天如果标题变化，会清理同日期旧文件，避免一篇文章出现多个版本。
+
 ## 版本历史
 
 | 版本 | 日期 | 更新内容 |
 |------|------|----------|
+| 5.3 | 2026-05-05 | 新增审稿模式、Obsidian 统一附件库和同日旧文件清理 |
 | 5.2 | 2026-05-05 | 增强专业人设框架、伪研究拦截和本地 Obsidian 同步 |
 | 5.1 | 2026-05-05 | 增加硬去重、内容家族冷却、泛标题和质量门禁 |
 | 5.0 | 2026-05-05 | 调整为“心光心理学”双栏目定位：周一三五育儿亲子，周二四六女性自我成长，周日跳过 |
