@@ -48,11 +48,33 @@ teen-psychology-insights/
 ├── scripts/
 │   ├── auto_publish.py
 │   ├── generate_image.py
-│   └── publish.py
+│   ├── publish.py
+│   └── sync_obsidian.py
 └── .github/workflows/daily-publish.yml
 ```
 
+## Obsidian 本地知识库
+
+GitHub Actions 在云端运行，不能直接写入本机 Obsidian。文章会先提交到 GitHub 仓库，本地再通过同步脚本拉取并复制到 Obsidian。
+
+默认目标目录：
+
+```text
+~/Documents/Obsidian/02-内容创作/心光心理学/
+```
+
+手动同步：
+
+```bash
+cd ~/.claude/skills/teen-psychology-insights
+python3 scripts/sync_obsidian.py --pull
+```
+
+同步后会按栏目分目录，并生成 `心光心理学内容索引.md`。
+
 ## 版本
 
+- v5.2：增强人设专业框架，并新增本地 Obsidian 同步脚本。
+- v5.1：加入硬去重、内容家族冷却、泛标题和质量门禁。
 - v5.0：双栏目定位，周一三五育儿亲子，周二四六女性自我成长。
 - v4.x：原“心光馨语”青少年心理/亲子关系日更逻辑。

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-心光心理学自动发布脚本 v5.0
+心光心理学自动发布脚本 v5.2
 周一三五生成育儿/亲子沟通文章，周二四六生成女性自我成长文章并发布到公众号
 
 流程：
@@ -23,10 +23,13 @@ v3.2  配图双引擎：Imagen 4 失败时自动切豆包 Seedream 兜底
 v3.4  选题防重复：修复热搜JSON解析失败（增加截断修复+纯文本兜底），日历选题池扩至每月15个，新增7天去重机制
 v4.0  引擎替换：DeepSeek V3 替代 Gemini，豆包 Seedream 为唯一配图引擎，移除 GOOGLE_API_KEY 依赖
 v5.0  定位调整：周一三五育儿/亲子沟通，周二四六女性自我成长，按栏目人设生成内容
+v5.1  内容质量门禁：硬去重、内容家族冷却、泛标题拦截
+v5.2  人设专业度增强：栏目专业框架、练习模板、伪研究拦截、本地 Obsidian 同步脚本
 """
 
 import argparse
 import base64
+import difflib
 import json
 import os
 import random
@@ -53,6 +56,40 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR = os.path.dirname(SCRIPT_DIR)
 LOG_FILE = os.path.join(WORK_DIR, "logs", "daily-publish.log")
 
+HARD_DUP_LOOKBACK_DAYS = 30
+FAMILY_COOLDOWN_DAYS = 10
+MAX_TOPIC_SELECTION_ATTEMPTS = 3
+
+GENERIC_TITLE_PATTERNS = [
+    "今天微博热搜",
+    "那个话题",
+    "这件事",
+    "看得我心里一紧",
+    "刷到一个热搜",
+]
+
+UNVERIFIED_AUTHORITY_PATTERNS = [
+    r"心理学家做过.*实验",
+    r"研究(发现|显示|表明)",
+    r"实验(发现|显示|表明)",
+    r"数据(发现|显示|表明)",
+    r"大脑里.*区域",
+    r"脑区.*活跃",
+    r"\d+%",
+]
+
+CONTENT_FAMILY_RULES = [
+    ("school_refusal", "厌学/不想上学", ["厌学", "不想上学", "讨厌上学", "讨厌学习", "逃学", "上学就"]),
+    ("homework_learning", "作业/学习压力", ["作业", "写作业", "学习", "成绩", "考试", "期中", "期末", "高考", "中考", "小升初"]),
+    ("anxiety_emotion", "焦虑/情绪失控", ["焦虑", "炸毛", "崩溃", "发脾气", "情绪", "喊救命", "累", "心累", "内耗"]),
+    ("phone_screen", "手机/屏幕关系", ["手机", "刷屏", "屏幕", "沉迷", "短视频", "游戏"]),
+    ("parent_child_comm", "亲子沟通", ["亲子", "沟通", "顶嘴", "唠叨", "说话", "吵架", "不愿意说"]),
+    ("boundaries", "边界/讨好", ["边界", "拒绝", "讨好", "照顾别人", "怕让别人失望", "委屈", "过度解释"]),
+    ("self_worth", "自我价值", ["自我价值", "自信", "不够好", "普通", "比较", "外表", "体重"]),
+    ("intimacy", "亲密关系", ["亲密关系", "伴侣", "争吵", "被忽略", "分手", "恋爱", "婚姻"]),
+    ("workplace", "职场情绪", ["职场", "工作", "上班", "同事", "老板", "加班", "职业"]),
+]
+
 PUBLISH_PROFILES = {
     "parenting": {
         "key": "parenting",
@@ -67,6 +104,22 @@ PUBLISH_PROFILES = {
             "如果热搜本身不是育儿话题，要提炼它背后的家庭沟通或孩子成长角度",
             "避免娱乐八卦、极端个案、未经证实的传闻和制造家长焦虑的角度",
         ],
+        "professional_frame": [
+            "先描述孩子的可观察行为，不急着评价孩子对错",
+            "把行为翻译成可能的感受和需要，让父母先看见关系层面的信号",
+            "区分“接纳感受”和“允许所有行为”：温柔但有边界",
+            "落到父母能练习的沟通句式、边界表达和家庭小练习",
+        ],
+        "practice_requirements": [
+            "必须出现一个“先别急着说……”的提醒，帮父母停下自动反应",
+            "必须出现一个“可以换成……”的话术替换模板",
+            "必须设计一个30秒内能完成的亲子沟通练习",
+        ],
+        "professional_guardrails": [
+            "不要把父母塑造成问题根源，也不要把孩子贴成懒、叛逆、玻璃心",
+            "不编心理学实验、百分比、脑区、专家姓名；没有来源时不要写成研究结论",
+            "需要提醒风险时，用“如果持续影响睡眠、饮食、上学或安全感，建议寻求专业支持”的温和表达",
+        ],
         "categories": ["育儿沟通", "亲子关系", "孩子情绪", "学习陪伴", "家庭教育", "家长成长"],
         "fallback_topics": [
             {"topic": "孩子顶嘴时，父母怎么把话接住", "category": "亲子关系"},
@@ -77,6 +130,14 @@ PUBLISH_PROFILES = {
             {"topic": "家庭里的好好说话，是孩子安全感的底色", "category": "家庭教育"},
             {"topic": "孩子沉迷手机时，先看见他的需要", "category": "亲子关系"},
             {"topic": "父母的温柔边界，才是孩子真正的规则感", "category": "家长成长"},
+            {"topic": "孩子总在睡前说心事，父母可以怎么接", "category": "育儿沟通"},
+            {"topic": "孩子被比较后沉默了，父母要先修复什么", "category": "孩子情绪"},
+            {"topic": "父母道歉，不会让孩子没规矩", "category": "家长成长"},
+            {"topic": "孩子突然锁房门，可能是在练习长大", "category": "亲子关系"},
+            {"topic": "饭桌上的一句话，可能决定孩子愿不愿意聊", "category": "家庭教育"},
+            {"topic": "孩子输不起时，先别急着教他大度", "category": "孩子情绪"},
+            {"topic": "父母越想控制，孩子越想逃开怎么办", "category": "亲子关系"},
+            {"topic": "孩子不敢求助，可能是怕被说没用", "category": "育儿沟通"},
         ],
         "article_structure": [
             "开头从微博热搜或一个家庭生活小场景切入，让家长觉得被理解",
@@ -115,6 +176,22 @@ PUBLISH_PROFILES = {
             "可以借微博热搜作为引子，但不要写成娱乐八卦或情绪宣泄",
             "保持心理动力学视角：看见关系模式、早年经验影响、重复的内在冲突和真实需要",
         ],
+        "professional_frame": [
+            "从一个现实事件或情绪反应进入，不急着劝读者变强",
+            "看见情绪背后的内在需要、关系模式和旧经验留下的保护方式",
+            "用一个心理动力学概念解释，但必须翻译成生活语言，例如防御、投射、依恋、重复性关系模式、内在冲突",
+            "把理解落回当下：一个自我觉察问题、一个边界练习、一个现实小行动",
+        ],
+        "practice_requirements": [
+            "至少出现2句以“你可以问自己：”开头的自我觉察问题",
+            "必须包含一个不超过5分钟的自我照顾或边界练习",
+            "必须把一个心理动力学概念讲成生活语言，不能堆术语",
+        ],
+        "professional_guardrails": [
+            "不诊断读者，不用创伤、抑郁、人格等标签解释一切",
+            "不把原生家庭写成宿命，也不把亲密关系写成操控技巧",
+            "持续痛苦、失眠、惊恐、关系暴力或自伤风险，要建议寻求专业支持",
+        ],
         "categories": ["自我成长", "情绪照顾", "关系边界", "自我价值", "亲密关系", "职场女性"],
         "fallback_topics": [
             {"topic": "为什么你总是在关系里先照顾别人", "category": "关系边界"},
@@ -125,6 +202,14 @@ PUBLISH_PROFILES = {
             {"topic": "女性的自我价值，不该只靠有用和懂事来证明", "category": "自我价值"},
             {"topic": "职场里的委屈感，常常也在提醒你看见边界", "category": "职场女性"},
             {"topic": "学会拒绝，不是变冷漠，而是开始尊重自己", "category": "关系边界"},
+            {"topic": "你总想把关系解释清楚，可能是在害怕失去", "category": "亲密关系"},
+            {"topic": "真正的自我照顾，是允许自己慢一点", "category": "情绪照顾"},
+            {"topic": "为什么被冷落时，你会先怀疑自己", "category": "自我价值"},
+            {"topic": "职场里不敢表达需求，可能不是你太弱", "category": "职场女性"},
+            {"topic": "关系里的安全感，不该只靠猜对方心情维持", "category": "亲密关系"},
+            {"topic": "当你开始不讨好，关系才有机会更真实", "category": "关系边界"},
+            {"topic": "成年女性的疲惫，有时来自一直扮演没事的人", "category": "情绪照顾"},
+            {"topic": "你值得被爱，不需要一直证明自己有用", "category": "自我价值"},
         ],
         "article_structure": [
             "开头用微博热搜或一个女性日常困境切入，不猎奇、不评判",
@@ -137,7 +222,7 @@ PUBLISH_PROFILES = {
             "用通俗语言解释一个心理动力学视角",
             "避免诊断化，不承诺疗效；遇到持续痛苦时建议寻求专业支持",
         ],
-        "forbidden_phrases": ["女人一定要", "彻底逆袭", "拿捏男人", "原生家庭毁了你", "治愈所有创伤"],
+        "forbidden_phrases": ["女人一定要", "彻底逆袭", "拿捏男人", "原生家庭毁了你", "治愈所有创伤", "你太敏感了"],
         "style_label": "温暖专业的心理动力学自我成长",
         "default_summary": "陪你看见内在需要与关系边界",
         "cover_prompt": (
@@ -254,24 +339,49 @@ def fetch_weibo_hot_topics(num=50):
     return _fetch_tianapi("weibohot", "hotword", "微博热搜", num=num)
 
 
-def choose_fallback_profile_topic(profile, recent_titles=None):
+def choose_fallback_profile_topic(profile, recent_titles=None, recent_history=None):
     """Pick a profile-specific fallback topic when Weibo hot topics are unavailable."""
     candidates = profile["fallback_topics"]
     if not candidates:
         return None
 
+    recent_history = recent_history or get_article_history(days=HARD_DUP_LOOKBACK_DAYS)
+    recent_titles = recent_titles or [item["title"] for item in recent_history]
     today = datetime.now()
     base_index = (today - datetime(2026, 1, 1)).days % len(candidates)
     for offset in range(len(candidates)):
         idx = (base_index + offset) % len(candidates)
         topic = candidates[idx]
-        if not _is_similar_topic(topic["topic"], recent_titles):
-            log(f"{profile['column_name']}兜底选题: {topic['topic']} (分类: {topic['category']})")
+        reason = _topic_rejection_reason(
+            topic["topic"],
+            recent_history=recent_history,
+            recent_titles=recent_titles,
+            profile=profile,
+        )
+        if reason:
+            log(f"{profile['column_name']}兜底选题跳过: {topic['topic']} | {reason}")
+            continue
+        log(f"{profile['column_name']}兜底选题: {topic['topic']} (分类: {topic['category']})")
+        return {**topic, "source": "栏目话题池", "profile": profile}
+
+    # Relax the family cooldown only after all candidates were rejected. Exact/similar
+    # title duplication remains blocked.
+    for offset in range(len(candidates)):
+        idx = (base_index + offset) % len(candidates)
+        topic = candidates[idx]
+        reason = _topic_rejection_reason(
+            topic["topic"],
+            recent_history=recent_history,
+            recent_titles=recent_titles,
+            profile=profile,
+            enforce_family=False,
+        )
+        if not reason:
+            log(f"{profile['column_name']}兜底选题（放宽内容家族冷却）: {topic['topic']} (分类: {topic['category']})")
             return {**topic, "source": "栏目话题池", "profile": profile}
 
-    topic = candidates[base_index]
-    log(f"{profile['column_name']}兜底选题（近期相似，强制使用）: {topic['topic']}")
-    return {**topic, "source": "栏目话题池", "profile": profile}
+    log(f"{profile['column_name']}兜底选题全部与近期标题相似，停止发布以避免重复")
+    return None
 
 
 def get_profile_by_key(profile_key):
@@ -684,49 +794,247 @@ CALENDAR_TOPICS = {
 }
 
 
-def get_recent_titles(days=7):
-    """读取最近 N 天已发布的文章标题，用于去重"""
-    titles = []
-    today = datetime.now()
-    for i in range(days):
-        d = today - timedelta(days=i)
-        md_file = os.path.join(WORK_DIR, f"article_{d.strftime('%Y%m%d')}.md")
-        if os.path.exists(md_file):
+def _parse_article_file(path):
+    """Read one generated article and return metadata used by editorial guards."""
+    meta = {
+        "file": os.path.basename(path),
+        "title": "",
+        "date": None,
+        "column": "",
+        "category": "",
+        "source": "",
+        "hot_ref": "",
+        "topic_family": "",
+        "family": None,
+    }
+    filename_match = re.search(r"article_(\d{8})\.md$", os.path.basename(path))
+    if filename_match:
+        try:
+            meta["date"] = datetime.strptime(filename_match.group(1), "%Y%m%d")
+        except ValueError:
+            pass
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return meta
+
+    for line in lines[:40]:
+        stripped = line.strip()
+        if stripped.startswith("title:"):
+            meta["title"] = stripped[6:].strip().strip('"\'')
+        elif stripped.startswith("date:"):
             try:
-                with open(md_file, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith("title:"):
-                            titles.append(line[6:].strip())
-                            break
-                        if line.startswith("# "):
-                            titles.append(line[2:].strip())
-                            break
-            except Exception:
+                meta["date"] = datetime.strptime(stripped[5:].strip()[:10], "%Y-%m-%d")
+            except ValueError:
                 pass
+        elif stripped.startswith("column:"):
+            meta["column"] = stripped[7:].strip()
+        elif stripped.startswith("category:"):
+            meta["category"] = stripped[9:].strip()
+        elif stripped.startswith("source:"):
+            meta["source"] = stripped[7:].strip()
+        elif stripped.startswith("hot_ref:"):
+            meta["hot_ref"] = stripped[8:].strip()
+        elif stripped.startswith("topic_family:"):
+            meta["topic_family"] = stripped[13:].strip()
+        elif stripped.startswith("# ") and not meta["title"]:
+            meta["title"] = stripped[2:].strip()
+
+    detected_family = detect_content_family(" ".join([meta["title"], meta["category"], meta["hot_ref"], meta["topic_family"]]))
+    meta["family"] = detected_family
+    return meta
+
+
+def get_article_history(days=None, limit=None):
+    """Scan generated article files instead of assuming consecutive daily files."""
+    history = []
+    today = datetime.now()
+    for filename in os.listdir(WORK_DIR):
+        if not re.match(r"article_\d{8}\.md$", filename):
+            continue
+        record = _parse_article_file(os.path.join(WORK_DIR, filename))
+        if not record.get("title"):
+            continue
+        if days is not None and record.get("date"):
+            if (today - record["date"]).days > days:
+                continue
+        history.append(record)
+
+    history.sort(key=lambda item: (item.get("date") or datetime.min, item["file"]), reverse=True)
+    if limit:
+        history = history[:limit]
+    return history
+
+
+def get_recent_titles(days=HARD_DUP_LOOKBACK_DAYS):
+    """读取最近 N 天已发布的文章标题，用于去重"""
+    titles = [item["title"] for item in get_article_history(days=days)]
     if titles:
-        log(f"近{days}天已发布文章: {titles}")
+        log(f"近{days}天已发布文章: {titles[:12]}")
     return titles
 
 
+def _normalize_text(text):
+    text = (text or "").lower()
+    text = re.sub(r"[\s，。！？、；：,.!?;:\"'“”‘’（）()《》【】\[\]#*_\-—~·|/\\]+", "", text)
+    for token in ["孩子", "父母", "家长", "妈妈", "爸爸", "心理学", "真正", "可能", "为什么", "怎么办", "这句话", "背后"]:
+        text = text.replace(token, "")
+    return text
+
+
+def _char_ngrams(text, n=2):
+    if len(text) <= n:
+        return {text} if text else set()
+    return {text[i:i + n] for i in range(len(text) - n + 1)}
+
+
+def _text_similarity(left, right):
+    left_norm = _normalize_text(left)
+    right_norm = _normalize_text(right)
+    if not left_norm or not right_norm:
+        return 0.0
+    if left_norm in right_norm or right_norm in left_norm:
+        return 1.0
+    seq_ratio = difflib.SequenceMatcher(None, left_norm, right_norm).ratio()
+    left_grams = _char_ngrams(left_norm)
+    right_grams = _char_ngrams(right_norm)
+    gram_ratio = len(left_grams & right_grams) / len(left_grams | right_grams) if left_grams and right_grams else 0.0
+    return max(seq_ratio, gram_ratio)
+
+
 def _is_similar_topic(topic_text, recent_titles):
-    """简单判断话题是否与近期文章标题相似"""
+    """判断话题是否与近期文章标题相似，避免只靠 LLM 提示自觉去重。"""
     if not recent_titles:
         return False
-    topic_lower = topic_text.lower().replace("，", "").replace("？", "").replace("！", "")
     for title in recent_titles:
-        title_lower = title.lower().replace("，", "").replace("？", "").replace("！", "")
-        # 完全包含
-        if topic_lower in title_lower or title_lower in topic_lower:
+        if _text_similarity(topic_text, title) >= 0.72:
             return True
-        # 关键词重叠率 > 60%
-        topic_chars = set(topic_lower)
-        title_chars = set(title_lower)
-        if topic_chars and title_chars:
-            overlap = len(topic_chars & title_chars) / min(len(topic_chars), len(title_chars))
-            if overlap > 0.6:
-                return True
     return False
+
+
+def detect_content_family(text):
+    """Map titles/topics into coarse content families for cooldown-based diversity."""
+    text = (text or "").lower()
+    for priority_key in ["school_refusal", "phone_screen"]:
+        for family_key, family_label, keywords in CONTENT_FAMILY_RULES:
+            if family_key == priority_key and any(keyword.lower() in text for keyword in keywords):
+                return (family_key, family_label)
+
+    best_family = None
+    best_score = 0
+    for family_key, family_label, keywords in CONTENT_FAMILY_RULES:
+        score = sum(1 for keyword in keywords if keyword.lower() in text)
+        if score > best_score:
+            best_family = (family_key, family_label)
+            best_score = score
+    return best_family
+
+
+def _recent_family_records(family_key, history, days=FAMILY_COOLDOWN_DAYS):
+    today = datetime.now()
+    records = []
+    for item in history or []:
+        if not item.get("family") or item["family"][0] != family_key:
+            continue
+        item_date = item.get("date")
+        if item_date and (today - item_date).days <= days:
+            records.append(item)
+    return records
+
+
+def _topic_rejection_reason(topic_text, recent_history=None, recent_titles=None, profile=None, enforce_family=True):
+    """Return a concrete reason when a candidate should not be used."""
+    if not topic_text or len(topic_text.strip()) < 4:
+        return "话题过短"
+
+    recent_history = recent_history or []
+    recent_titles = recent_titles or [item["title"] for item in recent_history]
+    if _is_similar_topic(topic_text, recent_titles):
+        return "与近30天标题过于相似"
+
+    family = detect_content_family(topic_text)
+    cooldown_families = {
+        "school_refusal",
+        "homework_learning",
+        "anxiety_emotion",
+        "phone_screen",
+        "boundaries",
+        "self_worth",
+        "intimacy",
+        "workplace",
+    }
+    if enforce_family and family and family[0] in cooldown_families:
+        family_records = _recent_family_records(family[0], recent_history, days=FAMILY_COOLDOWN_DAYS)
+        if family_records:
+            recent_titles_text = "、".join(item["title"] for item in family_records[:3])
+            return f"内容家族「{family[1]}」{FAMILY_COOLDOWN_DAYS}天内已写过：{recent_titles_text}"
+
+    if profile and topic_text.strip() in [item["topic"] for item in profile.get("fallback_topics", [])]:
+        return None
+    return None
+
+
+def _title_quality_issue(title, recent_history=None):
+    if not title or len(_normalize_text(title)) < 6:
+        return "标题过短或无有效信息"
+    if any(pattern in title for pattern in GENERIC_TITLE_PATTERNS):
+        return "标题过泛，像临时热搜占位标题"
+    if _is_similar_topic(title, [item["title"] for item in recent_history or []]):
+        return "最终标题与近30天标题过于相似"
+    return None
+
+
+def validate_article_output(article, topic_info, recent_history=None):
+    """Final publish gate for title/content quality before images and WeChat upload."""
+    if not article:
+        return ["文章为空"]
+    issues = []
+    profile = topic_info.get("profile") or PUBLISH_PROFILES["parenting"]
+    content = article.get("content", "")
+    title_issue = _title_quality_issue(article.get("title", ""), recent_history=recent_history)
+    if title_issue:
+        issues.append(title_issue)
+    forbidden_hits = [
+        phrase for phrase in profile.get("forbidden_phrases", [])
+        if phrase and phrase in (article.get("title", "") + content)
+    ]
+    if forbidden_hits:
+        issues.append("出现禁用表达：" + "、".join(forbidden_hits[:3]))
+    unverifiable_hits = [
+        pattern for pattern in UNVERIFIED_AUTHORITY_PATTERNS
+        if re.search(pattern, content)
+    ]
+    if unverifiable_hits:
+        issues.append("出现未核验的研究/实验/数据表达，需改为实践观察或生活化解释")
+    if article.get("word_count", 0) > 1500:
+        issues.append("文章超过1500字")
+    if article.get("word_count", 0) < 700:
+        issues.append("文章低于700字，信息量不足")
+    for placeholder in ["<!-- IMG_PLACEHOLDER_1 -->", "<!-- IMG_PLACEHOLDER_2 -->"]:
+        if placeholder not in content:
+            issues.append(f"缺少配图占位符 {placeholder}")
+    if profile.get("key") == "parenting":
+        if "可以换成" not in content:
+            issues.append("育儿线缺少“可以换成……”的话术替换模板")
+        if "30秒" not in content and "30 秒" not in content:
+            issues.append("育儿线缺少30秒亲子沟通练习")
+    if profile.get("key") == "women_growth":
+        if content.count("你可以问自己") < 2:
+            issues.append("女性成长线缺少至少2个“你可以问自己”觉察问题")
+        psychodynamic_markers = ["心理动力学", "关系模式", "防御", "投射", "依恋", "重复性关系", "内在冲突"]
+        if not any(marker in content for marker in psychodynamic_markers):
+            issues.append("女性成长线缺少清晰的心理动力学视角")
+    return issues
+
+
+def _format_recent_history_for_prompt(history, limit=10):
+    lines = []
+    for item in (history or [])[:limit]:
+        family_label = item["family"][1] if item.get("family") else "其他"
+        lines.append(f"- {item['title']}（{item.get('category', '')} / {family_label}）")
+    return "\n".join(lines)
 
 
 def fetch_calendar_topic(recent_titles=None):
@@ -794,19 +1102,37 @@ def _repair_json(text):
     return None
 
 
-def select_topic_from_hot(hot_topics, source="热搜", recent_titles=None, profile=None):
+def select_topic_from_hot(hot_topics, source="热搜", recent_titles=None, profile=None, recent_history=None):
     """Use LLM to pick the best profile-matched psychology angle from trending topics."""
     topics_text = "\n".join(f"{i+1}. {t}" for i, t in enumerate(hot_topics[:30]))
+    recent_history = recent_history or get_article_history(days=HARD_DUP_LOOKBACK_DAYS)
+    recent_titles = recent_titles or [item["title"] for item in recent_history]
 
     # 构建去重提示
     dedup_hint = ""
-    if recent_titles:
-        dedup_hint = f"\n\n重要：最近已发布过以下文章，请避免选择相同或相似的话题：\n" + "\n".join(f"- {t}" for t in recent_titles)
+    recent_history_text = _format_recent_history_for_prompt(recent_history)
+    if recent_history_text:
+        dedup_hint = f"""
 
-    if profile:
-        category_list = "/".join(profile["categories"])
-        rules = "\n".join(f"- {rule}" for rule in profile["topic_rules"])
-        prompt = f"""你是"{ACCOUNT_NAME}"公众号的选题编辑。
+重要：最近已发布过以下文章，请避开相同标题、相同问题场景、相同心理解释路径：
+{recent_history_text}
+
+硬性避让：
+- 近{FAMILY_COOLDOWN_DAYS}天写过的内容家族不要再写，例如厌学/不想上学、作业学习、焦虑情绪、手机屏幕、边界讨好等。
+- 不要把不同热搜都改写成同一个“孩子不想上学/焦虑/作业大战”角度。
+- 标题不能使用“今天微博热搜那个话题”这类泛泛占位表达。"""
+
+    blocked_candidates = []
+
+    def build_prompt(extra_blocked=None):
+        blocked_hint = ""
+        if extra_blocked:
+            blocked_hint = "\n\n本轮已被系统判定重复，请不要再选：\n" + "\n".join(f"- {item}" for item in extra_blocked)
+
+        if profile:
+            category_list = "/".join(profile["categories"])
+            rules = "\n".join(f"- {rule}" for rule in profile["topic_rules"])
+            return f"""你是"{ACCOUNT_NAME}"公众号的选题编辑。
 
 今日栏目：{profile['column_name']}
 账号定位：{profile['topic_goal']}
@@ -815,6 +1141,7 @@ def select_topic_from_hot(hot_topics, source="热搜", recent_titles=None, profi
 以下是今日{source}热点话题（前30条）：
 {topics_text}
 {dedup_hint}
+{blocked_hint}
 
 请从中选择一个最适合今日栏目的话题，或受热搜启发提炼一个更适合公众号的心理学角度。
 
@@ -827,12 +1154,12 @@ def select_topic_from_hot(hot_topics, source="热搜", recent_titles=None, profi
 {{"topic": "话题", "category": "分类", "hot_ref": "热点词"}}
 
 分类只能是：{category_list}"""
-    else:
-        prompt = f"""你是"心光心理学"公众号的编辑，专注心理健康和亲密关系。
+        return f"""你是"心光心理学"公众号的编辑，专注心理健康和亲密关系。
 
 以下是今日{source}热点话题（前30条）：
 {topics_text}
 {dedup_hint}
+{blocked_hint}
 
 请从中选一个最适合结合心理学来写文章的话题，或者受热点启发提炼一个相关话题。
 
@@ -844,54 +1171,84 @@ def select_topic_from_hot(hot_topics, source="热搜", recent_titles=None, profi
 严格按以下格式回复，只输出一行 JSON，不要有其他任何文字：
 {{"topic": "话题", "category": "分类", "hot_ref": "热点词"}}"""
 
-    result = call_gemini_api(prompt, max_tokens=1000)
-    if not result:
-        return None
-
-    # 尝试解析 JSON（含修复）
-    data = _repair_json(result)
-    if data and data.get("topic"):
-        log(f"热搜选题: {data['topic']} (参考热搜: {data.get('hot_ref', '')})")
+    def build_candidate(data):
         return {
             "topic": data["topic"],
-            "category": data.get("category", "热点"),
+            "category": data.get("category", profile["categories"][0] if profile else "热点"),
             "hot_ref": data.get("hot_ref", ""),
             "source": source,
             "profile": profile,
         }
 
-    # JSON 解析全部失败，用纯文本方式兜底：直接让 Gemini 只返回话题名
-    log(f"热搜JSON解析失败，尝试纯文本选题。原始返回: {result[:150]}")
-    if profile:
-        fallback_prompt = f"""从以下热搜话题中，选一个最适合"{profile['column_name']}"栏目写成心理学文章的话题。
+    for attempt in range(1, MAX_TOPIC_SELECTION_ATTEMPTS + 1):
+        result = call_gemini_api(build_prompt(blocked_candidates), max_tokens=1000)
+        if not result:
+            return None
+
+        data = _repair_json(result)
+        if data and data.get("topic"):
+            candidate = build_candidate(data)
+            reason = _topic_rejection_reason(
+                " ".join([candidate["topic"], candidate.get("hot_ref", "")]),
+                recent_history=recent_history,
+                recent_titles=recent_titles,
+                profile=profile,
+            )
+            if reason:
+                log(f"热搜选题跳过（第{attempt}次）: {candidate['topic']} | {reason}")
+                blocked_candidates.append(f"{candidate['topic']}（{reason}）")
+                continue
+            log(f"热搜选题: {candidate['topic']} (参考热搜: {candidate.get('hot_ref', '')})")
+            return candidate
+
+        # JSON 解析失败时只做一次纯文本兜底，仍然走硬去重。
+        log(f"热搜JSON解析失败，尝试纯文本选题。原始返回: {result[:150]}")
+        if profile:
+            fallback_prompt = f"""从以下热搜话题中，选一个最适合"{profile['column_name']}"栏目写成心理学文章的话题。
 作者人设：{profile['persona']}
 选题目标：{profile['topic_goal']}
+近期文章必须避开：
+{recent_history_text}
 只输出话题名称，不要输出其他任何内容：
 {topics_text}"""
-    else:
-        fallback_prompt = f"""从以下热搜话题中，选一个最适合写心理学文章的话题，只输出话题名称，不要输出其他任何内容：
+        else:
+            fallback_prompt = f"""从以下热搜话题中，选一个最适合写心理学文章的话题，只输出话题名称，不要输出其他任何内容：
 {topics_text}"""
-    fallback_result = call_gemini_api(fallback_prompt, max_tokens=200)
-    if fallback_result:
-        topic_name = fallback_result.strip().strip('"\'').split('\n')[0].strip()
-        if len(topic_name) > 3:
-            log(f"纯文本兜底选题: {topic_name}")
-            return {
-                "topic": topic_name,
-                "category": profile["categories"][0] if profile else "热点",
-                "hot_ref": "",
-                "source": source,
-                "profile": profile,
-            }
+        fallback_result = call_gemini_api(fallback_prompt, max_tokens=200)
+        if fallback_result:
+            topic_name = fallback_result.strip().strip('"\'').split('\n')[0].strip()
+            if len(topic_name) > 3:
+                candidate = {
+                    "topic": topic_name,
+                    "category": profile["categories"][0] if profile else "热点",
+                    "hot_ref": "",
+                    "source": source,
+                    "profile": profile,
+                }
+                reason = _topic_rejection_reason(
+                    candidate["topic"],
+                    recent_history=recent_history,
+                    recent_titles=recent_titles,
+                    profile=profile,
+                )
+                if reason:
+                    log(f"纯文本兜底选题跳过: {topic_name} | {reason}")
+                    blocked_candidates.append(f"{topic_name}（{reason}）")
+                    continue
+                log(f"纯文本兜底选题: {topic_name}")
+                return candidate
 
-    log("热搜选题彻底失败")
+    log("热搜选题彻底失败或全部被去重规则拦截")
     return None
 
 
 def select_topic(profile=None):
     """Select today's topic with profile-aware Weibo hot-search priority."""
     # 读取近期文章标题用于去重
-    recent_titles = get_recent_titles(days=7)
+    recent_history = get_article_history(days=HARD_DUP_LOOKBACK_DAYS)
+    recent_titles = [item["title"] for item in recent_history]
+    if recent_titles:
+        log(f"近{HARD_DUP_LOOKBACK_DAYS}天已发布文章: {recent_titles[:12]}")
 
     if profile:
         weibo_topics = fetch_weibo_hot_topics()
@@ -900,6 +1257,7 @@ def select_topic(profile=None):
                 weibo_topics,
                 source="微博热搜",
                 recent_titles=recent_titles,
+                recent_history=recent_history,
                 profile=profile,
             )
             if topic:
@@ -908,7 +1266,11 @@ def select_topic(profile=None):
         else:
             log("微博热搜为空，尝试栏目话题池")
 
-        fallback_topic = choose_fallback_profile_topic(profile, recent_titles=recent_titles)
+        fallback_topic = choose_fallback_profile_topic(
+            profile,
+            recent_titles=recent_titles,
+            recent_history=recent_history,
+        )
         if fallback_topic:
             return fallback_topic
 
@@ -921,7 +1283,12 @@ def select_topic(profile=None):
     # 第1层：Bing News 垂直搜索（精准命中心理/亲子话题）
     bing_topics = fetch_bing_news_topics()
     if bing_topics:
-        topic = select_topic_from_hot(bing_topics, source="Bing新闻垂直搜索", recent_titles=recent_titles)
+        topic = select_topic_from_hot(
+            bing_topics,
+            source="Bing新闻垂直搜索",
+            recent_titles=recent_titles,
+            recent_history=recent_history,
+        )
         if topic:
             return topic
         log("Bing新闻选题失败，尝试天行热搜")
@@ -929,7 +1296,12 @@ def select_topic(profile=None):
     # 第2层：天行多平台热搜（轮换，已知部分接口频率受限）
     hot_topics, source_name = fetch_hot_topics()
     if hot_topics:
-        topic = select_topic_from_hot(hot_topics, source=source_name, recent_titles=recent_titles)
+        topic = select_topic_from_hot(
+            hot_topics,
+            source=source_name,
+            recent_titles=recent_titles,
+            recent_history=recent_history,
+        )
         if topic:
             return topic
         log("热搜选题失败，尝试日历选题")
@@ -955,13 +1327,23 @@ def select_topic(profile=None):
     return topic
 
 
-def generate_article(topic_info):
+def generate_article(topic_info, avoid_titles=None, quality_notes=None):
     """Generate article using profile-specific editorial positioning."""
     log("正在生成文章...")
     profile = topic_info.get("profile") or PUBLISH_PROFILES["parenting"]
     structure = "\n".join(f"- {item}" for item in profile["article_structure"])
     must_include = "\n".join(f"- {item}" for item in profile["must_include"])
+    professional_frame = "\n".join(f"- {item}" for item in profile.get("professional_frame", []))
+    practice_requirements = "\n".join(f"- {item}" for item in profile.get("practice_requirements", []))
+    professional_guardrails = "\n".join(f"- {item}" for item in profile.get("professional_guardrails", []))
     forbidden = "、".join(profile["forbidden_phrases"])
+    avoid_titles = avoid_titles or []
+    avoid_hint = ""
+    if avoid_titles:
+        avoid_hint = "\n近期标题不能复用，也不要换汤不换药：\n" + "\n".join(f"- {title}" for title in avoid_titles[:12])
+    quality_hint = ""
+    if quality_notes:
+        quality_hint = "\n本次重写必须修正这些问题：\n" + "\n".join(f"- {note}" for note in quality_notes)
 
     prompt = f"""你是"{ACCOUNT_NAME}"公众号的作者。
 
@@ -970,11 +1352,19 @@ def generate_article(topic_info):
 目标读者：{profile['target_audience']}
 整体语气：{profile['tone']}
 
+专业判断框架（文章必须按这个内在逻辑展开，不一定逐字作为小标题）：
+{professional_frame}
+
+专业边界：
+{professional_guardrails}
+
 请根据以下话题写一篇公众号文章：
 
 话题：{topic_info['topic']}
 分类：{topic_info['category']}
 {f"热搜背景：今日微博热搜「{topic_info['hot_ref']}」与此话题相关。文章可以自然借这个热搜作为引子，但不要写成八卦评论。" if topic_info.get('hot_ref') else ""}
+{avoid_hint}
+{quality_hint}
 
 严格要求：
 1. 字数：900-1300字，绝不超过1500字
@@ -983,6 +1373,7 @@ def generate_article(topic_info):
 4. 段落短：每段不超过3-4行，手机阅读友好
 5. 温暖不鸡汤，专业不吓人，避免制造焦虑
 6. 禁止使用这些表达：{forbidden}
+7. 不要编造心理学实验、百分比、脑区、专家名字或“研究发现”；没有可核验来源时，用“在亲子沟通训练/咨询实践中常见的是……”或“从这个视角看……”来表达
 
 文章结构：
 {structure}
@@ -990,9 +1381,13 @@ def generate_article(topic_info):
 必须包含：
 {must_include}
 
+练习与落地要求：
+{practice_requirements}
+
 格式要求：
 - 输出纯 Markdown 格式
 - 第一行是标题（用 # ）
+- 标题必须具体，不要写“今天微博热搜那个话题”“这件事看得我心里一紧”这类占位标题
 - 正文不要在开头重复标题
 - 不要附参考资料
 - 不要用"根据研究表明"之类的生硬表达
@@ -1469,7 +1864,7 @@ def publish_to_wechat(title, html_content, cover_url=None, article_text="", prof
 
 
 def main():
-    parser = argparse.ArgumentParser(description="心光心理学自动发布脚本 V5.0")
+    parser = argparse.ArgumentParser(description="心光心理学自动发布脚本 V5.2")
     parser.add_argument("--check-env", action="store_true", help="检查环境依赖")
     parser.add_argument("--dry-run", action="store_true", help="试运行（不发布）")
     parser.add_argument("--topic", type=str, help="指定话题")
@@ -1520,7 +1915,7 @@ def main():
         log(f"{message}；已因 --ignore-schedule 使用默认育儿栏目")
 
     log("=" * 50)
-    log("心光心理学自动发布 V5.0 开始执行")
+    log("心光心理学自动发布 V5.2 开始执行")
     log(f"日期: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     log(f"今日栏目: {profile['column_name']} | 人设: {profile['persona']}")
     if args.dry_run:
@@ -1542,9 +1937,26 @@ def main():
         sys.exit(1)
 
     # 2. Generate article
-    article = generate_article(topic_info)
-    if not article:
-        log("❌ 文章生成失败")
+    recent_history = get_article_history(days=HARD_DUP_LOOKBACK_DAYS)
+    avoid_titles = [item["title"] for item in recent_history]
+    article = None
+    quality_issues = []
+    for attempt in range(1, 3):
+        article = generate_article(
+            topic_info,
+            avoid_titles=avoid_titles,
+            quality_notes=quality_issues,
+        )
+        if not article:
+            log("❌ 文章生成失败")
+            sys.exit(1)
+        quality_issues = validate_article_output(article, topic_info, recent_history=recent_history)
+        if not quality_issues:
+            break
+        log(f"文章质量门禁未通过（第{attempt}次）: {'；'.join(quality_issues)}")
+
+    if quality_issues:
+        log("❌ 文章质量门禁连续未通过，停止发布以避免重复或低质内容")
         sys.exit(1)
 
     # 3. Generate cover image
@@ -1561,12 +1973,16 @@ def main():
     # 5. Save article locally
     today_str = datetime.now().strftime("%Y%m%d")
     md_file = os.path.join(WORK_DIR, f"article_{today_str}.md")
+    family = detect_content_family(" ".join([article["title"], topic_info.get("topic", ""), topic_info.get("hot_ref", "")]))
+    family_label = family[1] if family else ""
     try:
         with open(md_file, "w", encoding="utf-8") as f:
             f.write(f"---\ntitle: {article['title']}\ndate: {datetime.now().strftime('%Y-%m-%d')}\n"
                     f"column: {profile['column_name']}\ncategory: {topic_info['category']}\n"
+                    f"topic: {topic_info.get('topic', '')}\n"
                     f"source: {topic_info.get('source', '')}\n"
                     f"hot_ref: {topic_info.get('hot_ref', '')}\n"
+                    f"topic_family: {family_label}\n"
                     f"persona: {profile['persona']}\nword_count: {article['word_count']}\n"
                     f"style: {profile['style_label']}\n---\n\n{article['content']}")
         log(f"文章已保存: {md_file}")
