@@ -1,0 +1,52 @@
+name: 发布指定心光文章草稿
+
+on:
+  workflow_dispatch:
+    inputs:
+      html_file:
+        description: 已排版 HTML 文件路径
+        required: true
+        default: dist/article_20260507.html
+      title:
+        description: 公众号标题
+        required: true
+        default: 放下成绩单，才看得见孩子真正的成长
+      summary:
+        description: 公众号摘要
+        required: true
+        default: 放下成绩单，看见孩子在学习里长出的坚持与底气
+      cover:
+        description: 封面图 URL
+        required: true
+        default: https://i.ibb.co/wFrrPn0P/xinguang-20260507-cover.png
+      appid:
+        description: 目标公众号 AppID
+        required: true
+        default: wx52189e9b012018e1
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: 推送到公众号草稿箱
+        env:
+          WECHAT_API_KEY: ${{ secrets.WECHAT_API_KEY }}
+        run: |
+          set -euo pipefail
+          python3 scripts/publish_existing_article.py \
+            --html "${{ inputs.html_file }}" \
+            --title "${{ inputs.title }}" \
+            --summary "${{ inputs.summary }}" \
+            --cover "${{ inputs.cover }}" \
+            --author "心光心理学" \
+            --appid "${{ inputs.appid }}"
