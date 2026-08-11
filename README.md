@@ -3,8 +3,8 @@
 按新的公众号定位运行：
 
 - 周一、周三、周五：根据微博热搜生成育儿主题文章，风格温馨、亲切，人设是一位温柔亲切的亲子沟通培训师。
-- 周二、周四、周六：发布女性自我成长主题文章，人设是一位温暖、专业的心理动力学方向心理咨询师。
-- 周日默认不发布。
+- 周二、周四、周六、周日：默认不自动发布。
+- 女性自我成长主题保留手动指定能力，不参与自动调度。
 
 ## 快速开始
 
@@ -33,7 +33,7 @@ python3 auto_publish.py --review-only
 | 公众号名称 | 心光心理学 |
 | AppID | `wx52189e9b012018e1` |
 | 自动化入口 | `scripts/auto_publish.py` |
-| 调度 | Cloudflare Worker `github-scheduler` 每天 20:00 北京时间触发；脚本内部周日跳过 |
+| 调度 | Cloudflare Worker `github-scheduler` 周一、周三、周五 20:00 北京时间触发；脚本内部对其他日期再次拦截 |
 
 ## 环境变量
 
@@ -61,7 +61,7 @@ teen-psychology-insights/
 
 ## Obsidian 本地知识库
 
-GitHub Actions 在云端运行，不能直接写入本机 Obsidian。文章会先提交到 GitHub 仓库，本地再通过同步脚本拉取并复制到 Obsidian。
+GitHub Actions 在云端运行，不能直接写入本机 Obsidian。文章会先提交到 GitHub 仓库，本地再通过同步脚本拉取并复制到 Obsidian；自动同步时间为周一、周三、周五 21:30。
 
 默认目标目录：
 
@@ -89,6 +89,7 @@ python3 scripts/sync_obsidian.py --pull
 
 ## 版本
 
+- v5.4：自动发布与 Obsidian 同步统一调整为周一、周三、周五。
 - v5.3：新增审稿模式、Obsidian 统一附件库和本地修改保护。
 - v5.2：增强人设专业框架，并新增本地 Obsidian 同步脚本。
 - v5.1：加入硬去重、内容家族冷却、泛标题和质量门禁。

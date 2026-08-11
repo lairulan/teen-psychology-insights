@@ -1,4 +1,4 @@
-name: 心光心理学周一至周六发布
+name: 心光心理学周一三五发布
 
 on:
   # GitHub Actions 自带定时触发（UTC 03:00 = 北京时间 11:00）
@@ -6,7 +6,7 @@ on:
   # schedule:
   #    - cron: '0 3 * * *'
 
-  # Cloudflare Workers 触发（作为备份双保险）
+  # Cloudflare Worker 仅在周一、周三、周五触发
   repository_dispatch:
     types: [daily-psychology]
 

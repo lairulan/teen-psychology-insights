@@ -1,7 +1,7 @@
 ---
 name: teen-psychology-insights
-version: 5.2.0
-description: 心光心理学公众号内容自动生成与发布。周一三五按微博热搜生成育儿/亲子沟通文章；周二四六生成女性自我成长文章；周日默认不发。触发词："心光心理学"、"心光馨语"、"写心理文章"、"亲子沟通文章"、"女性自我成长文章"。
+version: 5.4.0
+description: 心光心理学公众号内容自动生成与发布。仅周一、周三、周五按微博热搜生成并推送育儿/亲子沟通文章；其余日期默认不发，女性自我成长文章保留手动生成能力。触发词："心光心理学"、"心光馨语"、"写心理文章"、"亲子沟通文章"、"女性自我成长文章"。
 author: rulanlai
 tags: [psychology, parenting, women-growth, wechat]
 ---
@@ -15,8 +15,8 @@ tags: [psychology, parenting, women-growth, wechat]
 | 星期 | 栏目 | 选题来源 | 人设与风格 |
 |------|------|----------|------------|
 | 周一、周三、周五 | 育儿与亲子沟通 | 微博热搜优先，兜底用亲子沟通话题池 | 温柔、亲切的亲子沟通培训师；温馨、具体、不指责 |
-| 周二、周四、周六 | 女性自我成长 | 微博热搜可延展话题优先，兜底用女性成长话题池 | 温暖、专业的心理动力学方向心理咨询师；稳、深、通俗 |
-| 周日 | 不发布 | - | 默认跳过 |
+| 周二、周四、周六、周日 | 不自动发布 | - | 默认跳过 |
+| 手动指定 `women_growth` | 女性自我成长 | 微博热搜可延展话题优先，兜底用女性成长话题池 | 温暖、专业的心理动力学方向心理咨询师；稳、深、通俗 |
 
 ## 核心规则
 
@@ -47,7 +47,7 @@ tags: [psychology, parenting, women-growth, wechat]
 
 ## 常用命令
 
-自动按当天星期运行：
+按自动发布日运行：
 
 ```bash
 cd ~/.claude/skills/teen-psychology-insights/scripts
@@ -72,7 +72,7 @@ python3 auto_publish.py --theme parenting --topic "孩子顶嘴时父母怎么�
 python3 auto_publish.py --theme women_growth --topic "为什么总是在关系里先照顾别人" --dry-run
 ```
 
-周日或非默认日强制运行：
+非自动发布日强制运行：
 
 ```bash
 python3 auto_publish.py --theme parenting --ignore-schedule
@@ -123,6 +123,7 @@ python3 scripts/auto_publish.py --review-only
 
 | 版本 | 日期 | 更新内容 |
 |------|------|----------|
+| 5.4 | 2026-08-11 | 自动发布与 Obsidian 同步统一收敛为周一、周三、周五 |
 | 5.3 | 2026-05-05 | 新增审稿模式、Obsidian 统一附件库、同日旧文件清理和本地修改保护 |
 | 5.2 | 2026-05-05 | 增强专业人设框架、伪研究拦截和本地 Obsidian 同步 |
 | 5.1 | 2026-05-05 | 增加硬去重、内容家族冷却、泛标题和质量门禁 |

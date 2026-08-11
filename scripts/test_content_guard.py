@@ -24,6 +24,20 @@ def record(title, family_text=None, days_ago=1, category=""):
 
 
 class ContentGuardTests(unittest.TestCase):
+    def test_publish_profile_only_runs_monday_wednesday_friday(self):
+        expected = {
+            10: "parenting",  # Monday
+            11: None,         # Tuesday
+            12: "parenting",  # Wednesday
+            13: None,         # Thursday
+            14: "parenting",  # Friday
+            15: None,         # Saturday
+            16: None,         # Sunday
+        }
+        for day, profile_key in expected.items():
+            profile = ap.get_publish_profile(datetime(2026, 8, day, 20, 0))
+            self.assertEqual(profile["key"] if profile else None, profile_key)
+
     def test_exact_duplicate_title_is_rejected(self):
         history = [record("当孩子说“我讨厌学习”时，他真正想说的是什么？")]
         reason = ap._topic_rejection_reason(

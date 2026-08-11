@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 心光心理学自动发布脚本 v5.2
-周一三五生成育儿/亲子沟通文章，周二四六生成女性自我成长文章并发布到公众号
+周一三五生成育儿/亲子沟通文章并发布到公众号，其余日期默认跳过
 
 流程：
-1. 按星期选择栏目（周一三五育儿，周二四六女性成长，周日跳过）
+1. 按星期选择栏目（周一三五育儿，其余日期跳过；女性成长保留手动运行）
 2. 读取微博热搜并提炼符合栏目定位的心理学角度
 3. 用 DeepSeek V3 生成温暖、亲切、专业的公众号文章（豆包兜底）
 4. 用豆包 Seedream 生成封面图 + 2张正文配图，上传 imgbb 获取 URL
@@ -25,6 +25,7 @@ v4.0  引擎替换：DeepSeek V3 替代 Gemini，豆包 Seedream 为唯一配图
 v5.0  定位调整：周一三五育儿/亲子沟通，周二四六女性自我成长，按栏目人设生成内容
 v5.1  内容质量门禁：硬去重、内容家族冷却、泛标题拦截
 v5.2  人设专业度增强：栏目专业框架、练习模板、伪研究拦截、本地 Obsidian 同步脚本
+v5.4  自动调度收敛为周一、周三、周五，其余日期默认跳过
 """
 
 import argparse
@@ -166,7 +167,7 @@ PUBLISH_PROFILES = {
     "women_growth": {
         "key": "women_growth",
         "column_name": "女性自我成长",
-        "schedule": "周二、周四、周六",
+        "schedule": "仅手动运行（不参与自动调度）",
         "persona": "一位温暖、专业、心理动力学方向的心理咨询师",
         "tone": "温暖、稳稳的、专业但不学术；像咨询室里慢慢陪读者看见自己的感受、关系模式和内在需要",
         "target_audience": "关注自我成长、关系边界、情绪照顾和内在稳定感的女性读者",
@@ -239,11 +240,8 @@ PUBLISH_PROFILES = {
 
 WEEKDAY_PROFILE = {
     0: "parenting",      # Monday
-    1: "women_growth",  # Tuesday
     2: "parenting",      # Wednesday
-    3: "women_growth",  # Thursday
     4: "parenting",      # Friday
-    5: "women_growth",  # Saturday
 }
 
 # 话题库（按天数轮询，覆盖全年不重复）
@@ -1884,7 +1882,7 @@ def main():
         choices=sorted(PUBLISH_PROFILES.keys()),
         help="手动指定栏目：parenting=育儿亲子，women_growth=女性自我成长",
     )
-    parser.add_argument("--ignore-schedule", action="store_true", help="忽略周日不发布规则")
+    parser.add_argument("--ignore-schedule", action="store_true", help="忽略周一三五发布日限制")
     args = parser.parse_args()
 
     # Check environment
@@ -1917,7 +1915,7 @@ def main():
         profile = get_publish_profile()
 
     if not profile:
-        message = "今天不是心光心理学公众号的发布日（周一三五育儿，周二四六女性自我成长，周日默认不发布）"
+        message = "今天不是心光心理学公众号的自动发布日（仅周一三五自动发布育儿与亲子沟通文章）"
         if not args.ignore_schedule:
             log(message)
             log("如需手动运行，请加 --theme parenting 或 --theme women_growth，并加 --ignore-schedule")
