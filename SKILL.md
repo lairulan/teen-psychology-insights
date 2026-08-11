@@ -109,6 +109,8 @@ python3 scripts/auto_publish.py --review-only
 
 `sync_obsidian.py` 会把仓库里的 `article_*.md` 按栏目复制到 Obsidian，并更新 `心光心理学内容索引.md`。GitHub Actions 只能写远端仓库，本地 Obsidian 需要本机同步任务拉取后复制。
 
+当正式技能仓库存在本地修改或运行环境不能写入 `.git/FETCH_HEAD` 时，`--pull` 会保留工作区不动，自动从该仓库的 `origin` 创建临时浅克隆作为同步源，避免因 Git 权限或脏工作区中断 Obsidian 同步。
+
 统一附件库：
 
 ```text
@@ -123,6 +125,7 @@ python3 scripts/auto_publish.py --review-only
 
 | 版本 | 日期 | 更新内容 |
 |------|------|----------|
+| 5.5 | 2026-08-11 | Obsidian 同步增加远端临时快照回退，保护脏工作区并绕过 FETCH_HEAD 写入限制 |
 | 5.4 | 2026-08-11 | 自动发布与 Obsidian 同步统一收敛为周一、周三、周五 |
 | 5.3 | 2026-05-05 | 新增审稿模式、Obsidian 统一附件库、同日旧文件清理和本地修改保护 |
 | 5.2 | 2026-05-05 | 增强专业人设框架、伪研究拦截和本地 Obsidian 同步 |

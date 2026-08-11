@@ -2,6 +2,7 @@
 
 ## 本次同步与审稿流程优化
 
+- Obsidian 同步检测到正式仓库有本地修改或 `git pull` 受限时，自动改用 `origin` 临时快照，不修改或覆盖正式工作区。
 - 本地 Obsidian 同步自动化时间为 21:30（仅周一、周三、周五）。
 - Obsidian 新增统一附件库：`~/Documents/Obsidian/02-内容创作/心光心理学/附件库/`。
 - `sync_obsidian.py` 会把文章里的远程图片、HTML 图片、本地附件链接复制或下载到附件库，并改写为 Obsidian 内部链接。

@@ -15,8 +15,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -117,7 +119,7 @@ def extension_from_src(src, default=".png"):
     return default
 
 
-def copy_or_download_asset(src, attachments_dir, prefix, index, dry_run=False):
+def copy_or_download_asset(src, attachments_dir, prefix, index, repo_dir=REPO_DIR, dry_run=False):
     if not src or is_wiki_embed(src) or src.startswith("#") or src.startswith("mailto:"):
         return None
 
@@ -138,7 +140,7 @@ def copy_or_download_asset(src, attachments_dir, prefix, index, dry_run=False):
 
     local_path = Path(urllib.parse.unquote(clean_src)).expanduser()
     if not local_path.is_absolute():
-        local_path = (REPO_DIR / local_path).resolve()
+        local_path = (repo_dir / local_path).resolve()
     if not local_path.exists():
         return None
     shutil.copy2(local_path, destination)
@@ -154,7 +156,7 @@ def obsidian_asset_ref(vault_dir, asset_path, embed=True, label=None):
     return f"[[{rel}]]"
 
 
-def prepare_content_assets(content, vault_dir, attachments_dir, date_text, title, dry_run=False):
+def prepare_content_assets(content, vault_dir, attachments_dir, date_text, title, repo_dir=REPO_DIR, dry_run=False):
     """Copy/download markdown assets into the central Obsidian attachment folder."""
     prefix = f"{date_text}-{sanitize_filename(title, max_len=40)}"
     image_idx = 0
@@ -168,7 +170,14 @@ def prepare_content_assets(content, vault_dir, attachments_dir, date_text, title
             return match.group(0)
         image_idx += 1
         try:
-            asset_path = copy_or_download_asset(src, attachments_dir, f"{prefix}-image", image_idx, dry_run=dry_run)
+            asset_path = copy_or_download_asset(
+                src,
+                attachments_dir,
+                f"{prefix}-image",
+                image_idx,
+                repo_dir=repo_dir,
+                dry_run=dry_run,
+            )
         except Exception as exc:
             print(f"Warning: failed to sync image {src}: {exc}", file=sys.stderr)
             return match.group(0)
@@ -181,7 +190,14 @@ def prepare_content_assets(content, vault_dir, attachments_dir, date_text, title
         src = match.group(2).strip()
         image_idx += 1
         try:
-            asset_path = copy_or_download_asset(src, attachments_dir, f"{prefix}-image", image_idx, dry_run=dry_run)
+            asset_path = copy_or_download_asset(
+                src,
+                attachments_dir,
+                f"{prefix}-image",
+                image_idx,
+                repo_dir=repo_dir,
+                dry_run=dry_run,
+            )
         except Exception as exc:
             print(f"Warning: failed to sync html image {src}: {exc}", file=sys.stderr)
             return match.group(0)
@@ -200,7 +216,14 @@ def prepare_content_assets(content, vault_dir, attachments_dir, date_text, title
             return match.group(0)
         attachment_idx += 1
         try:
-            asset_path = copy_or_download_asset(src, attachments_dir, f"{prefix}-attachment", attachment_idx, dry_run=dry_run)
+            asset_path = copy_or_download_asset(
+                src,
+                attachments_dir,
+                f"{prefix}-attachment",
+                attachment_idx,
+                repo_dir=repo_dir,
+                dry_run=dry_run,
+            )
         except Exception as exc:
             print(f"Warning: failed to sync attachment {src}: {exc}", file=sys.stderr)
             return match.group(0)
@@ -238,6 +261,61 @@ def run_pull(repo_dir):
     print(result.stdout.strip())
     if result.returncode != 0:
         raise RuntimeError("git pull --ff-only failed; please resolve the local repo state first")
+
+
+def git_output(repo_dir, *args):
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo_dir,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if result.returncode != 0:
+        output = result.stdout.strip()
+        raise RuntimeError(output or f"git {' '.join(args)} failed")
+    return result.stdout.strip()
+
+
+def repo_has_local_changes(repo_dir):
+    return bool(git_output(repo_dir, "status", "--porcelain"))
+
+
+def clone_remote_snapshot(repo_dir, destination):
+    origin_url = git_output(repo_dir, "remote", "get-url", "origin")
+    result = subprocess.run(
+        ["git", "clone", "--depth", "1", "--single-branch", origin_url, str(destination)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if result.returncode != 0:
+        output = result.stdout.strip()
+        raise RuntimeError(f"remote snapshot clone failed: {output}")
+    return destination
+
+
+@contextmanager
+def pull_source(repo_dir):
+    """Yield the newest safe article source without overwriting local checkout changes."""
+    use_snapshot = repo_has_local_changes(repo_dir)
+    if use_snapshot:
+        print("Local checkout has uncommitted changes; preserving it and using a fresh remote snapshot.")
+    else:
+        try:
+            run_pull(repo_dir)
+            print("Article source: updated local checkout")
+            yield repo_dir
+            return
+        except RuntimeError as exc:
+            print(f"Warning: {exc}", file=sys.stderr)
+            print("Falling back to a fresh remote snapshot without modifying the local checkout.")
+
+    with tempfile.TemporaryDirectory(prefix="xingguang-obsidian-sync-") as temp_dir:
+        snapshot_dir = Path(temp_dir) / "repo"
+        clone_remote_snapshot(repo_dir, snapshot_dir)
+        print("Article source: fresh remote snapshot")
+        yield snapshot_dir
 
 
 def iter_articles(repo_dir, days=None):
@@ -344,7 +422,7 @@ def write_index(vault_dir, records, dry_run=False):
         "## 栏目",
         "",
         "- 育儿与亲子沟通：周一、周三、周五",
-        "- 女性自我成长：周二、周四、周六",
+        "- 女性自我成长：仅手动生成，不参与自动调度",
         "",
         "## 文章",
         "",
@@ -399,6 +477,7 @@ def sync_articles(repo_dir, vault_dir, attachments_dir=None, days=None, dry_run=
             attachments_dir,
             date_text,
             title,
+            repo_dir=repo_dir,
             dry_run=dry_run,
         )
         removed, skipped_old = cleanup_same_day_articles(
@@ -441,7 +520,11 @@ def main():
     parser.add_argument("--repo", default=str(REPO_DIR), help="teen-psychology-insights repo path")
     parser.add_argument("--vault", default=str(DEFAULT_VAULT_DIR), help="Obsidian target folder")
     parser.add_argument("--attachments", help="Obsidian attachment folder; default is <vault>/附件库")
-    parser.add_argument("--pull", action="store_true", help="先执行 git pull --ff-only")
+    parser.add_argument(
+        "--pull",
+        action="store_true",
+        help="获取远端最新文章；本地仓库不可安全拉取时自动改用临时远端快照",
+    )
     parser.add_argument("--days", type=int, help="只同步最近 N 天文章；默认同步全部")
     parser.add_argument("--dry-run", action="store_true", help="只预览，不写文件")
     parser.add_argument("--overwrite-local", action="store_true", help="允许覆盖 Obsidian 中已被手动修改的文章")
@@ -456,16 +539,24 @@ def main():
     )
 
     if args.pull:
-        run_pull(repo_dir)
-
-    counts, records = sync_articles(
-        repo_dir,
-        vault_dir,
-        attachments_dir=attachments_dir,
-        days=args.days,
-        dry_run=args.dry_run,
-        overwrite_local=args.overwrite_local,
-    )
+        with pull_source(repo_dir) as source_repo_dir:
+            counts, records = sync_articles(
+                source_repo_dir,
+                vault_dir,
+                attachments_dir=attachments_dir,
+                days=args.days,
+                dry_run=args.dry_run,
+                overwrite_local=args.overwrite_local,
+            )
+    else:
+        counts, records = sync_articles(
+            repo_dir,
+            vault_dir,
+            attachments_dir=attachments_dir,
+            days=args.days,
+            dry_run=args.dry_run,
+            overwrite_local=args.overwrite_local,
+        )
     print(f"Obsidian target: {vault_dir}")
     print(f"Attachment library: {attachments_dir}")
     print(

@@ -82,6 +82,8 @@ cd ~/.claude/skills/teen-psychology-insights
 python3 scripts/sync_obsidian.py --pull
 ```
 
+如果正式技能仓库存在本地修改，或当前运行环境不能写入 `.git/FETCH_HEAD`，脚本会保持该仓库不变，自动使用 `origin` 的临时远端快照完成同步。
+
 同步后会按栏目分目录，并生成 `心光心理学内容索引.md`。
 如果文章里有远程图片、HTML 图片或本地附件链接，同步脚本会复制或下载到 `附件库`，并改写为 Obsidian 内部链接。同一天标题变化时，会自动清理同日期旧文件。
 
@@ -89,6 +91,7 @@ python3 scripts/sync_obsidian.py --pull
 
 ## 版本
 
+- v5.5：Obsidian 同步增加临时远端快照回退，避免 Git 权限或脏工作区阻断同步。
 - v5.4：自动发布与 Obsidian 同步统一调整为周一、周三、周五。
 - v5.3：新增审稿模式、Obsidian 统一附件库和本地修改保护。
 - v5.2：增强人设专业框架，并新增本地 Obsidian 同步脚本。
